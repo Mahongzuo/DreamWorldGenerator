@@ -24,8 +24,17 @@ export function createNavigation(world,field,region,trees,bridges){
   for(const o of crossings)add(deckGrid,{object:o},o.x,o.z,Math.hypot(o.w,o.d)*.5);
   for(const piece of bridges)add(deckGrid,{piece},piece.x,piece.z,piece.w*.5+.2);
   function solid(x,z,r,kind){
-    return (grid.get(key(x,z))??[]).some(({object,tree,margin})=>object?inFootprint(x,z,object,r+margin):
-      (x-tree.x)**2+(z-tree.z)**2<((kind==='fly'?tree.crown??tree.r:tree.r)+r)**2);
+    const extra=Math.max(0,r-.75);
+    for(let i=Math.floor((x-extra)/size);i<=Math.floor((x+extra)/size);i++){
+      for(let j=Math.floor((z-extra)/size);j<=Math.floor((z+extra)/size);j++){
+        for(const {object,tree,margin} of grid.get(i+','+j)??[]){
+          const blocked=object?inFootprint(x,z,object,r+margin):
+            (x-tree.x)**2+(z-tree.z)**2<((kind==='fly'?tree.crown??tree.r:tree.r)+r)**2;
+          if(blocked)return true;
+        }
+      }
+    }
+    return false;
   }
   function deck(x,z,r=0){
     for(const {object:o,piece} of deckGrid.get(key(x,z))??[]){
@@ -55,34 +64,121 @@ export function createNavigation(world,field,region,trees,bridges){
     for(let i=1;i<=n;i++)if(!valid(x+(xx-x)*i/n,z+(zz-z)*i/n,r,kind))return false;
     return true;
   }
-  function find(x,z,r,kind,limit=3.5){
-    if(valid(x,z,r,kind))return {x,z};
+  function find(x,z,r,kind,limit=3.5,available=()=>true){
+    if(valid(x,z,r,kind)&&available(x,z))return {x,z};
     for(let distance=.24;distance<=limit;distance+=.29)for(let i=0;i<16;i++){
       const a=i*Math.PI/8,xx=x+Math.cos(a)*distance,zz=z+Math.sin(a)*distance;
-      if(valid(xx,zz,r,kind))return {x:xx,z:zz};
+      if(valid(xx,zz,r,kind)&&available(xx,zz))return {x:xx,z:zz};
     }
     return null;
   }
   return {valid,sweep,find,trees:allTrees,height(x,z){return deck(x,z)??field.height(x,z);}};
 }
 
-export function makeWander(nav,x,z,r,kind,seed,radius=2){
-  const initial=nav.find(x,z,r,kind);
+// The same index holds wildlife and placed animals. Flights and swimmers occupy separate layers.
+export function createAnimalCrowd(){
+  const cells=new Map();
+  let largest=0;
+  function remove(a){
+    if(!a?.cell)return;
+    const bucket=cells.get(a.cell);
+    bucket?.delete(a);
+    if(!bucket?.size)cells.delete(a.cell);
+    a.cell=null;
+  }
+  function update(a){
+    const cell=a.kind+':'+key(a.x,a.z);
+    if(a.cell===cell)return;
+    remove(a);
+    if(!cells.has(cell))cells.set(cell,new Set());
+    cells.get(cell).add(a);
+    a.cell=cell;
+    largest=Math.max(largest,a.r);
+  }
+  function clearPath(x,z,xx,zz,r,kind,ignore){
+    const dx=xx-x,dz=zz-z, length=dx*dx+dz*dz;
+    const reach=r+largest+.04;
+    for(let i=Math.floor((Math.min(x,xx)-reach)/size);i<=Math.floor((Math.max(x,xx)+reach)/size);i++){
+      for(let j=Math.floor((Math.min(z,zz)-reach)/size);j<=Math.floor((Math.max(z,zz)+reach)/size);j++){
+        for(const other of cells.get(kind+':'+i+','+j)??[]){
+          if(other===ignore)continue;
+          const along=length?Math.max(0,Math.min(1,((other.x-x)*dx+(other.z-z)*dz)/length)):0;
+          if((other.x-x-dx*along)**2+(other.z-z-dz*along)**2<(r+other.r+.04)**2)return false;
+        }
+      }
+    }
+    return true;
+  }
+  return {remove,update,clearPath,fits(x,z,r,kind,ignore){return clearPath(x,z,x,z,r,kind,ignore);}};
+}
+
+export function makeWander(nav,x,z,r,kind,seed,radius=2,crowd){
+  const initial=nav.find(x,z,r,kind,3.5,(xx,zz)=>!crowd||crowd.fits(xx,zz,r,kind));
   if(!initial)return null;
-  return {...initial,homeX:initial.x,homeZ:initial.z,r,kind,radius,heading:seed,seed,clock:0,rest:0};
+  const state={...initial,homeX:initial.x,homeZ:initial.z,r,kind,radius,heading:seed%(Math.PI*2),
+    seed,clock:0,rest:0,goal:null,speed:0,gait:0,travel:0,grazing:0,grazeIntent:false,turnTo:null,crowd,random:(Math.floor(seed*137453)>>>0)||1};
+  crowd?.update(state);
+  return state;
+}
+function random(a){
+  a.random=(Math.imul(a.random,1664525)+1013904223)>>>0;
+  return a.random/4294967296;
+}
+const angleDiff=(a,b)=>Math.atan2(Math.sin(b-a),Math.cos(b-a));
+const approach=(from,to,limit)=>from+Math.max(-limit,Math.min(limit,to-from));
+function pause(a,min,max,graze=false){
+  a.goal=null;
+  a.grazeIntent=graze;
+  a.speed=0;
+  a.rest=min+(max-min)*random(a);
+}
+function chooseGoal(nav,a){
+  const dx=a.homeX-a.x,dz=a.homeZ-a.z;
+  const fromHome=Math.hypot(dx,dz);
+  const homeward=Math.atan2(dx,dz);
+  const center=fromHome>a.radius*.78?homeward:a.heading+(random(a)-.5)*1.55;
+  const side=random(a)<.5?-1:1;
+  for(const offset of [0,.45,-.45,.92,-.92,1.55,-1.55,2.35,-2.35,Math.PI]){
+    const angle=center+offset*side;
+    for(const length of [1.0+random(a)*1.25,.54]){
+      const x=a.x+Math.sin(angle)*length,z=a.z+Math.cos(angle)*length;
+      if(Math.hypot(x-a.homeX,z-a.homeZ)>a.radius+.35)continue;
+      if(!nav.sweep(a.x,a.z,x,z,a.r,a.kind)||a.crowd&&!a.crowd.clearPath(a.x,a.z,x,z,a.r,a.kind,a))continue;
+      return {x,z};
+    }
+  }
+  return null;
 }
 export function wander(nav,a,dt,speed){
   if(!a||dt<=0)return;
   a.clock+=dt;
-  if(a.rest>0){a.rest=Math.max(0,a.rest-dt);return;}
-  const dx=a.homeX-a.x,dz=a.homeZ-a.z;
-  const target=Math.hypot(dx,dz)>a.radius?Math.atan2(dx,dz):a.heading+Math.sin(a.clock*.87+a.seed)*dt*.86;
-  const step=dt*speed;
-  for(const offset of [0,.54,-.54,1.12,-1.12,1.72,-1.72,Math.PI]){
-    const angle=target+offset,xx=a.x+Math.sin(angle)*step,zz=a.z+Math.cos(angle)*step;
-    if(!nav.sweep(a.x,a.z,xx,zz,a.r,a.kind))continue;
-    a.x=xx;a.z=zz;a.heading=angle;
+  const land=a.kind==='land';
+  const turnRate=land?1.35:2.15;
+  a.grazing=approach(a.grazing,Number(land&&a.grazeIntent&&a.rest>.45&&a.turnTo===null),dt*1.3);
+  a.gait=approach(a.gait,a.speed,dt*1.7);
+  if(a.rest>0){
+    a.rest=Math.max(0,a.rest-dt);
+    a.speed=0;
+    if(a.turnTo!==null)a.heading+=approach(0,angleDiff(a.heading,a.turnTo),dt*turnRate);
     return;
   }
-  a.heading+=.91;
+  a.turnTo=null;
+  if(!a.goal)a.goal=chooseGoal(nav,a);
+  if(!a.goal){pause(a,.33,.87);return;}
+  const dx=a.goal.x-a.x,dz=a.goal.z-a.z;
+  const remaining=Math.hypot(dx,dz);
+  if(remaining<.085){pause(a,land ? 1.25 : .28,land?3.8:1.45,land&&random(a)<.76);return;}
+  const turn=angleDiff(a.heading,Math.atan2(dx,dz));
+  a.heading+=approach(0,turn,dt*turnRate);
+  const facing=Math.max(0,Math.cos(turn*1.25));
+  const targetSpeed=Math.min(speed,Math.sqrt(remaining*.85))*facing;
+  const distance=Math.min(remaining,a.speed*dt);
+  const x=a.x+Math.sin(a.heading)*distance,z=a.z+Math.cos(a.heading)*distance;
+  if(!nav.sweep(a.x,a.z,x,z,a.r,a.kind)||a.crowd&&!a.crowd.clearPath(a.x,a.z,x,z,a.r,a.kind,a)){
+    pause(a,.26,.81);
+    return;
+  }
+  a.x=x;a.z=z;a.travel+=distance;
+  a.speed=approach(a.speed,targetSpeed,dt*(targetSpeed<a.speed?1.55:.72));
+  a.crowd?.update(a);
 }

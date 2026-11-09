@@ -648,7 +648,7 @@ function up(p){
   const o=p&&(current.kind!=='move'||Math.hypot(p.x-current.start.x,p.z-current.start.z)>.13)?dragShape(p):current.object;
   cancelDraft();
   if(current.kind==='create'){
-    if(!validObject(o)){announce(waterAnimal(o)||items[o.type].form==='lily'?'请选一处足够深且宽敞的水面。':'请换一处开阔、合适的地面。');return;}
+    if(!validObject(o)){announce(waterAnimal(o)||items[o.type].form==='lily'?'请选一处足够深且宽敞的水面。':items[o.type].category==='animal'?'请选择开阔的地面，并给附近动物留出距离。':'请换一处开阔、合适的地面。');return;}
     if(items[o.type].category!=='animal')record(o.type);
     commit({...world,objects:[...world.objects,o]});
     announce(items[o.type].name+'已建好');

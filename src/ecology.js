@@ -3,6 +3,7 @@ import {randFrom} from './model.js';
 import {biomeOf, inFootprint, items} from './sandbox-state.js';
 import {makeWander, wander} from './navigation.js';
 import {architectureHeight} from './asset-models.js';
+import {drawDeer,hoofGround} from './deer.js';
 
 const twoPi=Math.PI*2;
 const wingGeometry=(side)=>{
@@ -34,7 +35,7 @@ function meshOf(geometry,material,max){
   return mesh;
 }
 
-export function buildEcology(world,field,region,nav) {
+export function buildEcology(world,field,region,nav,crowd) {
   const group=new T.Group();
   const biome=biomeOf(world);
   const random=randFrom(world.seed+'wildlife');
@@ -72,8 +73,9 @@ export function buildEcology(world,field,region,nav) {
     const center=findDry(kind==='rabbit');
     if(!center)continue;
     const offset=random()*twoPi;
-    const agent=makeWander(nav,center.x,center.z,kind==='deer'?.43:.23,'land',offset,1.85);
-    if(agent)runners.push({agent,kind,offset,scale:.85+random()*.27});
+    const scale=.85+random()*.27;
+    const agent=makeWander(nav,center.x,center.z,(kind==='deer'?.75:.31)*scale,'land',offset,2.45,crowd);
+    if(agent)runners.push({agent,kind,offset,scale});
   }
   const butterflies=[];
   if(biome==='meadow'||world.strokes.some(s=>['flowers','heather'].includes(s.type))){
@@ -81,7 +83,7 @@ export function buildEcology(world,field,region,nav) {
       const center=findDry(true);
       if(!center)continue;
       const phase=random()*twoPi;
-      const agent=makeWander(nav,center.x,center.z,.10,'fly',phase,1.35);
+      const agent=makeWander(nav,center.x,center.z,.22,'fly',phase,1.35,crowd);
       if(agent)butterflies.push({agent,phase,color:['#efca79','#cb9bb4','#e4d39b'][i%3]});
     }
   }
@@ -91,10 +93,10 @@ export function buildEcology(world,field,region,nav) {
     const stream=streams[i%streams.length];
     const [x,z]=stream.p[Math.floor(stream.p.length*(.18+i*.17))];
     const phase=i*1.84+random()*.7;
-    const agent=makeWander(nav,x,z,.16,'water',phase,2.7);
+    const agent=makeWander(nav,x,z,.26,'water',phase,2.7,crowd);
     if(agent)ducks.push({agent,phase});
   }
-  const flock=Array.from({length:7},(_,i)=>({a:i*.126+random()*.08,r:6.0+random()*1.9,
+  const flock=Array.from({length:7},(_,i)=>({a:i*.31+random()*.042,r:7.1+random()*.70,
     y:5.65+random()*1.4,rate:3.5+random()*1.4,s:.69+random()*.18}));
   const clouds=[
     {x:-12.3,z:-9.45,y:6.2,s:1.08},{x:7.0,z:-10.9,y:7.6,s:1.16},
@@ -113,29 +115,8 @@ export function buildEcology(world,field,region,nav) {
     m.setColorAt(i,color.set(hex));
   }
   const body=(...args)=>draw('body',...args);
-  function deer(time,phase){
-    const tan='#a97850',light='#c49a68',hoof='#664c39';
-    const stride=Math.sin(time*3.2+phase), head=.07*Math.sin(time*1.6+phase);
-    body(tan,0,.63,0,.23,.27,.47);
-    body(light,0,.73,.24,.165,.28,.20,.16);
-    body(tan,0,.97+head,.38,.125,.15,.215,-.25);
-    body('#d3b189',0,.928+head,.52,.098,.09,.113);
-    body('#524639',0,.955+head,.605,.06,.055,.045);
-    for(const x of [-1,1]){
-      body(tan,x*.114,1.07+head,.33,.052,.104,.058,0,0,-x*.47);
-      body('#53483b',x*.105,.99+head,.453,.021,.026,.023);
-      body(hoof,x*.075,1.16+head,.28,.021,.11,.022,-.22,0,-x*.31);
-      body(hoof,x*.095,1.21+head,.325,.018,.083,.019,.58);
-      for(const z of [-1,1]){
-        const lift=Math.max(0,stride*x*z)*.058;
-        body(tan,x*.141,.29+lift,z*.278,.059,.30,.061,stride*x*z*.18);
-        body(hoof,x*.141,.065+lift,z*.30,.059,.063,.07);
-      }
-    }
-    body('#e3c69b',0,.72,-.431,.086,.115,.082,-.52);
-  }
-  function rabbit(time,phase){
-    const pulse=Math.max(0,Math.sin(time*2.7+phase))*.088;
+  function rabbit(time,phase,speed){
+    const pulse=Math.max(0,Math.sin(time*2.7+phase))*.088*Math.min(1,speed/.27);
     body('#a88d72',0,.174+pulse,0,.162,.147,.226);
     body('#b99d83',0,.226+pulse,.177,.114,.123,.128);
     body('#e1d1ae',0,.18+pulse,-.213,.078,.074,.069);
@@ -151,9 +132,10 @@ export function buildEcology(world,field,region,nav) {
     for(const o of runners){
       const {agent:a}=o;
       wander(nav,a,dt,o.kind==='deer'?.49:.39);
-      pose(a.x,nav.height(a.x,a.z),a.z,a.heading,o.scale);
-      if(o.kind==='deer')deer(a.rest>0?0:time,o.offset);
-      else rabbit(a.rest>0?0:time,o.offset);
+      const height=nav.height(a.x,a.z);
+      pose(a.x,height,a.z,a.heading,o.scale);
+      if(o.kind==='deer')drawDeer(body,{...a,travel:a.travel/o.scale},undefined,undefined,false,hoofGround(nav,a,height,o.scale));
+      else rabbit(a.travel*13,o.offset,a.speed);
       report(o.kind,a,a.x,a.z);
     }
     for(const o of ducks){
@@ -204,6 +186,7 @@ export function buildEcology(world,field,region,nav) {
     }
   }
   function dispose(){
+    for(const {agent} of [...runners,...ducks,...butterflies])crowd?.remove(agent);
     group.removeFromParent();
     for(const m of Object.values(shapes)){m.geometry.dispose();m.dispose();}
     matte.dispose();cloudMaterial.dispose();

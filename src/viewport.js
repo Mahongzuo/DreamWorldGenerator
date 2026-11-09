@@ -6,7 +6,8 @@ import {baseHeight, flyingAnimal, footprint, inFootprint, items, LAND, MAX_POINT
 import {buildEcology} from './ecology.js';
 import {architectureHeight} from './asset-models.js';
 import {buildAvatar} from './creatures.js';
-import {makeWander, wander} from './navigation.js';
+import {createAnimalCrowd,makeWander,wander} from './navigation.js';
+import {hoofGround} from './deer.js';
 
 const lighting = {
   day:{sky:'#f0f6e3',ground:'#a7af8d',ambient:2.08,sun:'#ffeccb',power:2.36,exposure:1.08,position:[-10,17,11],glass:.22},
@@ -89,6 +90,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
   let yaw=Math.PI,lift=2.55;
   const movement=new Set();
   const cameraGoal=new T.Vector3(),lookGoal=new T.Vector3();
+  let crowd=createAnimalCrowd();
   const surroundings=new Map();
   const objects=new Map();
   const raycaster=new T.Raycaster(),ndc=new T.Vector2(),plane=new T.Plane(new T.Vector3(0,1,0),0);
@@ -156,6 +158,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     if(!pick) return result;
     let closest=Infinity;
     for(const [id,{group,object:o}] of objects){
+      if(!group.visible)continue;
       const isHouse=items[o.type].category==='house';
       const h=o.type==='tower'?7.2:isHouse?architectureHeight(items[o.type].form,o.w):
         items[o.type].category==='plant'?o.w*3.1:o.w*1.45;
@@ -316,8 +319,13 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
         if(entry?.world!==next){
           if(entry)disposeGroup(entry.land);
           const adjacent=buildLand(kit,next,{x,z,coarse:true});
+          const nearbyCrowd=createAnimalCrowd();
           for(const o of next.objects){
+            const animal=items[o.type].category==='animal';
+            const a=animal?makeWander(adjacent.userData.navigation,o.x,o.z,animalRadius(o),typeOf(o),o.a,2,nearbyCrowd):null;
+            if(animal&&!a)continue;
             const group=buildObject(kit,o,next,adjacent.userData.field);
+            if(a)group.position.set(a.x,objectHeight(adjacent.userData.field,{...o,x:a.x,z:a.z}),a.z);
             group.traverse(m=>{if(m.isMesh)m.castShadow=false;});
             adjacent.add(group);
           }
@@ -373,14 +381,13 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
       if(oldLand)disposeGroup(oldLand);
       updateBorder();
       ecology?.dispose();
-      ecology=buildEcology(next,land.userData.field,region,land.userData.navigation);
-      ecology.step(time,next.light);
-      scene.add(ecology.group);
+      crowd=createAnimalCrowd();
     }
     if(landChange||objectsChanged){
       for(const [id,entry] of objects){
         const o=next.objects.find(o=>o.id===id);
         if(o!==entry.object||regionChange||next.season!==world?.season||next.seed!==world?.seed){
+          entry.agent?.crowd?.remove(entry.agent);
           disposeGroup(entry.group);
           objects.delete(id);
         }
@@ -388,8 +395,9 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
       for(const o of next.objects){
         const entry=objects.get(o.id);
         if(entry){
-          entry.group.position.y=objectHeight(land.userData.field,o);
-          if(items[o.type].category==='animal'&&landChange)bindAnimal(entry);
+          if(items[o.type].category==='animal'){
+            if(landChange||!entry.agent)bindAnimal(entry);
+          }else entry.group.position.y=objectHeight(land.userData.field,o);
         }else{
           const group=buildObject(kit,o,next,land.userData.field);
           scene.add(group);
@@ -399,6 +407,11 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
           if(items[o.type].category==='animal')bindAnimal(made);
         }
       }
+    }
+    if(landChange){
+      ecology=buildEcology(next,land.userData.field,region,land.userData.navigation,crowd);
+      ecology.step(time,next.light);
+      scene.add(ecology.group);
     }
     if(lightChange){
       const look=lighting[next.light];
@@ -446,13 +459,20 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
   }
   const currentTile=()=>region?tileKey(region.x,region.z):'diorama';
   const typeOf=o=>waterAnimal(o)?'water':flyingAnimal(o)?'fly':'land';
-  const animalRadius=o=>Math.max(.11,o.w*(items[o.type].form==='fish'?.40:.57));
+  const animalRadius=o=>{
+    const form=items[o.type].form;
+    const ratio=['deer','elk'].includes(form)?.94:['swan','heron','goose','bear','horse'].includes(form)?.90:
+      ['fox','raccoon','squirrel','cow','pig','owl','swallow','kingfisher','beaver'].includes(form)?.79:.72;
+    return Math.max(.15,o.w*ratio);
+  };
 
   function bindAnimal(entry){
     const {object:o,group}=entry;
     const nav=land.userData.navigation;
     const previous=entry.agent;
-    entry.agent=makeWander(nav,previous?.x??o.x,previous?.z??o.z,animalRadius(o),typeOf(o),o.a+o.id*1.37,1.52+o.w*.65);
+    previous?.crowd?.remove(previous);
+    entry.agent=makeWander(nav,previous?.x??o.x,previous?.z??o.z,animalRadius(o),typeOf(o),previous?.heading??o.a,2.0+o.w*.65,crowd);
+    if(entry.agent)entry.agent.random=(Math.floor(o.id*18317+o.x*151+o.z*871)>>>0)||1;
     if(entry.agent){
       entry.agent.homeX=o.x;entry.agent.homeZ=o.z;
       group.visible=true;
@@ -463,13 +483,17 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     const {group,object:o,agent:a}=entry;
     const {field,navigation:nav}=land.userData;
     const hover=['butterfly','dragonfly','bee'].includes(items[o.type].form)?.62:1.77;
+    const gait=Math.min(1,a.speed/.35);
+    const deerPose=group.userData.deerPose;
     const y=a.kind==='water'?field.level+.037+Math.sin(t*2.8+a.seed)*.021:
       a.kind==='fly'?field.height(a.x,a.z)+hover+Math.sin(t*3+a.seed)*.18:
-      nav.height(a.x,a.z)+Math.abs(Math.sin(t*5+a.seed))*(a.rest>0?0:.032);
+      nav.height(a.x,a.z)+(deerPose?0:Math.abs(Math.sin(a.travel*17))*.026*gait);
     group.position.set(a.x,y,a.z);
     group.rotation.set(0,a.heading,a.kind==='fly'?Math.sin(t*3+a.seed)*.19:0);
+    deerPose?.(a,hoofGround(nav,a,y,o.w/.8));
   }
   function stepAnimals(dt){
+    if(!dt)return;
     const nav=land.userData.navigation;
     for(const entry of objects.values()){
       const {agent:a,object:o}=entry;
@@ -602,8 +626,13 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
   function observe(){
     const target=nearest();
     if(target?.agent){
-      target.agent.rest=2.3;
-      target.agent.heading=Math.atan2(player.x-target.x,player.z-target.z);
+      target.agent.rest=2.6;
+      target.agent.turnTo=Math.atan2(player.x-target.x,player.z-target.z);
+      if(!living){
+        target.agent.heading=target.agent.turnTo;
+        const entry=objects.get(target.id);
+        if(entry)placeAnimal(entry,time);
+      }
     }
     schedule();
     return target;
@@ -644,7 +673,10 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     beginWalk,endWalk,observe,chop,
     move(key,on){if(on)movement.add(key);else movement.delete(key);schedule();},
     clearMovement(){movement.clear();},
-    canPlace(o){return land.userData.navigation.valid(o.x,o.z,animalRadius(o),typeOf(o));},
+    canPlace(o){
+      const r=animalRadius(o),kind=typeOf(o);
+      return land.userData.navigation.valid(o.x,o.z,r,kind)&&crowd.fits(o.x,o.z,r,kind,objects.get(o.id)?.agent);
+    },
     depth(x,z){return land?.userData.field.depth(x,z)??0;},
     motion(active){living=active;schedule();}
   };

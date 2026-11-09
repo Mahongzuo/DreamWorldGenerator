@@ -1,10 +1,12 @@
 import * as T from 'three';
 import {batch} from './model.js';
+import {buildDeer} from './deer.js';
 
 const flight=['owl','swallow','kingfisher','butterfly','dragonfly','bee'];
 const swim=['duck','goose','swan','fish'];
 
 export function buildCreature(kit,o,def){
+  if(def.form==='deer'||def.form==='elk')return buildDeer(kit,o,def);
   const group=new T.Group(), b=batch(kit);
   const form=def.form,c=def.color,a=def.accent,s=o.w;
   const part=(hex,x,y,z,xx,yy,zz,rx=0,ry=0,rz=0)=>b.put('rock','basic',hex,x*s,y*s,z*s,xx*s,yy*s,zz*s,rx,ry,rz,false);
@@ -63,7 +65,7 @@ export function buildCreature(kit,o,def){
     else if(rabbit)part(pale,0,.35,-.379,.13,.13,.125);
     else if(form==='hedgehog')for(let i=0;i<17;i++)part(a,Math.sin(i*2.4)*.20,.47+Math.cos(i*.33)*.055,Math.cos(i*2.4)*.31,.045,.072,.045,0,i);
   }else{
-    const deer=['deer','elk','goat'].includes(form), tall=deer||form==='horse', sheep=form==='sheep';
+    const tall=form==='goat'||form==='horse', sheep=form==='sheep';
     const low=['raccoon','badger','beaver','fox'].includes(form);
     const y=tall?.70:low?.37:.51, len=form==='horse'?.56:.48, w=sheep?.37:form==='bear'?.38:.275;
     part(c,0,y,0,w,tall?.24:.29,len);
@@ -74,13 +76,9 @@ export function buildCreature(kit,o,def){
     part(sheep?a:c,0,y+neck,.44,.177,.157,.248,-.18);
     part(form==='pig'?a:pale,0,y+neck-.044,.637,form==='pig'?.144:.109,.075,.075);
     for(const x of [-1,1]){
-      part(c,x*.131,y+neck+.13,.379,.072,deer?.112:.075,.078,0,0,-x*.44);
+      part(c,x*.131,y+neck+.13,.379,.072,form==='goat'?.112:.075,.078,0,0,-x*.44);
       eye(x*.143,y+neck+.024,.535);
       if(form==='raccoon'||form==='badger')part(dark,x*.145,y+neck+.014,.509,.045,.047,.09,0,x*.24);
-      if(deer&&form!=='goat'){
-        part(a,x*.105,y+neck+.30,.348,.030,.176,.031,-.18,0,-x*.30);
-        part(a,x*.156,y+neck+.37,.399,.023,.10,.025,.60,0,-x*.28);
-      }
       if(form==='goat'||form==='cow')part(a,x*.129,y+neck+.205,.385,.038,.10,.037,-.22,0,-x*.43);
       for(const z of [-1,1]){
         part(c,x*w*.68,y*.36,z*.31,.072,y*.42,.085);
