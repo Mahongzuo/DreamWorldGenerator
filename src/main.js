@@ -1,7 +1,9 @@
 import './style.css';
 import {icon} from './icons.js';
-import {catalog, items, themes, preset, inside, footprint, clamp, round, loadWorld, worldLink, STORE_KEY, ATLAS_KEY, MAX_OBJECTS, MAX_STROKES, MAX_POINTS, biomeOf, biomes, normalize, tileInside, tileKey, waterAnimal, wildTile} from './sandbox-state.js';
+import {catalog, items, themes, preset, inside, footprint, clamp, round, loadWorld, worldLink, STORE_KEY, ATLAS_KEY, MAX_OBJECTS, MAX_STROKES, MAX_POINTS, biomeOf, biomes, normalize, tileKey, waterAnimal, wildTile} from './sandbox-state.js';
 import {createViewport} from './viewport.js';
+import {TERRITORY_KEY, joinRegions, appendRegion, normalizeTerritory, territoryEnvelope, sliceRegion, contains, regionAt} from './territory.js';
+import {preloadModelPack} from './model-pack.js';
 import {guideSources} from './field-guide.js';
 
 const views={
@@ -44,6 +46,7 @@ const help={
 };
 const svg=(inside,view='0 0 100 48')=>`<svg viewBox="${view}" aria-hidden="true">${inside}</svg>`;
 function thumbnail(o){
+  if(o.id.startsWith('pack-'))return `<img src="/models/${o.id}.png" alt="${o.name}" loading="lazy">`;
   const ground='<ellipse cx="50" cy="38" rx="35" ry="7" fill="#829465" opacity=".22"/>';
   const {color:c,accent:a,form}=o;
   if(o.category==='animal'){
@@ -90,7 +93,7 @@ let linked=Boolean(location.search), origin=loadWorld(), world=origin;
 let mode='build',category='house',active='cedar',selected=null,draft=null,width=items[active].width,filter='';
 let viewport,toastTimer,before=[],after=[],nextId=1,pending=null,frame=0;
 let open=false,rx=0,rz=0,motion=!matchMedia('(prefers-reduced-motion: reduce)').matches;
-const atlas=new Map(),edits=new Map(),unsavedRegions=new Map();
+const atlas=new Map(),unsavedRegions=new Map();
 const originKey=tileKey(0,0);
 const savedRegions=new Set();
 try{
@@ -105,10 +108,12 @@ try{
 }catch{/* A storage failure leaves the session's edits in memory. */}
 const claimed=(x,z)=>{
   const key=tileKey(x,z);
+  if(world.regions)return Boolean(world.regions[key]);
   return key===originKey||savedRegions.has(key)||unsavedRegions.has(key);
 };
 const directions={'0,-1':'北','-1,0':'西','1,0':'东','0,1':'南'};
 function readRegion(x,z){
+  if(world.regions)return sliceRegion(world,x,z)??wildTile('LINQI-ATLAS',x,z);
   if(x===0&&z===0)return origin;
   const key=tileKey(x,z);
   if(unsavedRegions.has(key))return unsavedRegions.get(key);
@@ -133,11 +138,30 @@ try{
     }
   }
 }catch{/* Keep the initial plot if storage is unavailable. */}
+let territorySaved=true;
+try{
+  if(!linked){
+    const restored=normalizeTerritory(JSON.parse(localStorage.getItem(TERRITORY_KEY)));
+    if(restored){world=restored;open=true;if(!claimed(rx,rz))rx=rz=0;}
+  }
+}catch{/* Legacy files are retained as a migration fallback. */}
+function makeContinuous(){
+  if(world.regions)return;
+  const entries=[[0,0,origin]];
+  for(const key of new Set([...savedRegions,...unsavedRegions.keys()])){
+    if(key===originKey)continue;
+    const [x,z]=key.split(',').map(Number);entries.push([x,z,readRegion(x,z)]);
+  }
+  world=joinRegions(entries);before=[];after=[];
+}
+if(open){makeContinuous();
+  try{localStorage.setItem(TERRITORY_KEY,JSON.stringify(territoryEnvelope(world)));}catch{territorySaved=false;}
+}
 function rememberLocation(){
   if(linked)return;
   try{localStorage.setItem(ATLAS_KEY,JSON.stringify({open,x:rx,z:rz,motion}));}catch{/* Editing still works without storage. */}
 }
-const inBounds=(x,z,margin=0)=>open?tileInside(x,z,margin):inside(x,z,margin);
+const inBounds=(x,z,margin=0)=>world.regions?contains(world.regions,x,z,margin):inside(x,z,margin);
 const optionButtons=(key,values)=>values.map((v)=>`<button class="option" type="button" data-world="${key}" data-value="${v}" aria-pressed="${world[key]===v}">${labels[v]}</button>`).join('');
 
 document.querySelector('#app').innerHTML=`
@@ -147,7 +171,8 @@ document.querySelector('#app').innerHTML=`
     <span class="save-state" id="save-state"><span class="dot"></span><span id="save-label">本地存档</span></span>
     <button type="button" class="btn" id="journal-open" aria-label="打开观察笔记">${icon('book',16)} <span class="journal-label">观察笔记</span><strong id="journal-count">0</strong></button>
     <button type="button" class="btn map-btn" id="map-mode" aria-pressed="false">${icon('map',16)}<span id="map-label">扩建领地</span></button>
-    <button type="button" class="btn" id="share" aria-label="复制设计链接" title="复制设计链接">${icon('link',16)}<span class="share-text">分享</span></button>
+    <button type="button" class="btn" id="share" aria-label="分享或导出领地" title="分享或导出领地">${icon('link',16)}<span class="share-text">导出 / 分享</span></button>
+    <button type="button" class="btn" id="import-world">导入领地</button><input type="file" id="import-file" accept="application/json,.json" hidden>
     <button type="button" class="btn primary" id="snapshot">${icon('camera',16)}拍照</button>
   </div>
 </div></header>
@@ -216,7 +241,7 @@ document.querySelector('#app').innerHTML=`
       <div class="territory-bar">
         <div><strong id="territory-status">起点领地</strong><span id="territory-hint">沿东、南、西、北扩建，每次增加一块可建造地形。</span></div>
         <button class="btn primary" type="button" id="open-territory">${icon('map',15)} 扩建领地</button>
-        <label class="territory-picker" id="territory-picker" hidden><span>前往领地</span><select id="territory-select" aria-label="前往已扩建领地"></select></label>
+        <label class="territory-picker" id="territory-picker" hidden><span>定位视野</span><select id="territory-select" aria-label="前往已扩建领地"></select></label>
       </div>
       <div class="viewfoot">
         <span class="hints">${icon('mouse',13)} <span id="tool-tip"></span></span><span class="metrics" id="metrics"></span>
@@ -239,6 +264,7 @@ document.querySelector('#app').innerHTML=`
         <div class="biome-copy"><strong id="biome-name"></strong><small id="biome-detail"></small></div>
         <button class="chip" type="button" id="motion" aria-pressed="true">动态</button>
       </section>
+      <label class="quality-control">画质 <select id="quality" aria-label="画质"><option value="auto">自动适配</option><option value="low">省电 · 无阴影</option><option value="balanced">均衡 · 柔和阴影</option><option value="high">精细 · 高清阴影</option></select></label>
       <section class="environment" aria-label="季节与光照">
         <div><span>${icon('tree',15)}季节</span><div class="segment">${optionButtons('season',['summer','autumn','winter'])}</div></div>
         <div><span>${icon('sun',15)}光照</span><div class="segment">${optionButtons('light',['day','gold','night'])}</div></div>
@@ -267,7 +293,7 @@ function toolTip(){
   if(mode==='spawn')return '点击地面放置角色，或从预设步道出发。';
   if(mode==='walk')return 'WASD 或方向键移动 · 拖动画面转向 · E 观察 · F 伐木 · Esc 返回建造。';
   if(mode!=='build') {
-    if(mode==='camera'&&open)return matchMedia('(pointer: coarse)').matches?'拖动前往相邻领地，双指旋转或缩放。':'拖动前往相邻领地，右键拖动旋转，滚轮缩放。';
+    if(mode==='camera'&&open)return matchMedia('(pointer: coarse)').matches?'拖动前往相邻领地，双指旋转或缩放。':'拖动或右键平移，滚轮缩放；中键拖动旋转。';
     return help[mode];
   }
   const o=items[active];
@@ -290,7 +316,7 @@ function showMode(){
   viewport?.showFootprint(mode==='select' ? selectedObject() : null,true,true);
 }
 function renderCatalog(){
-  const candidates=views[category].types.flatMap(key=>catalog[key].items.map(([id])=>items[id]));
+  const candidates=views[category].types.flatMap(key=>catalog[key].items.map(([id])=>items[id])).sort((a,b)=>Number(b.id.startsWith('pack-'))-Number(a.id.startsWith('pack-')));
   for(const b of byId('categories').children)b.setAttribute('aria-pressed',b.dataset.category===category);
   const families=[...new Set(candidates.map(o=>o.family))];
   const selector=byId('catalog-filter');
@@ -376,7 +402,10 @@ function chopNow(){
   }
   record(target.type);
   if(target.id!==undefined)commit({...world,objects:world.objects.filter(o=>o.id!==target.id)});
-  else commit({...world,felled:[...new Set([...(world.felled??[]),target.key])]});
+  else if(world.regions){
+    const key=target.region??regionAt(target.x,target.z).join(','),meta=world.regions[key];
+    commit({...world,regions:{...world.regions,[key]:{...meta,felled:[...new Set([...(meta.felled??[]),target.key])]}}});
+  }else commit({...world,felled:[...new Set([...(world.felled??[]),target.key])]});
   announce(gained?'已伐下树木 · 收集到木料':'已伐下树木');
 }
 function objectRange(key,value,min,max,title,unit){
@@ -428,6 +457,13 @@ function persistRegion(key,data){
   }
 }
 function save(){
+  if(world.regions){
+    try{
+      localStorage.setItem(TERRITORY_KEY,JSON.stringify(territoryEnvelope(world)));territorySaved=true;
+      if(linked){const url=new URL(location.href);url.search='';window.history.replaceState(null,'',url);linked=false;}
+    }catch{territorySaved=false;}
+    rememberLocation();return;
+  }
   const key=tileKey(rx,rz);
   if(key===originKey)origin=world;
   else atlas.set(key,world);
@@ -436,12 +472,12 @@ function save(){
 }
 function syncTerritory(){
   const current=tileKey(rx,rz);
-  const keys=[...new Set([originKey,...savedRegions,...unsavedRegions.keys()])];
-  const status=unsavedRegions.has(current)?'仅保存在本次会话':linked&&current===originKey?'分享场景':
+  const keys=world.regions?Object.keys(world.regions):[...new Set([originKey,...savedRegions,...unsavedRegions.keys()])];
+  const status=world.regions?(territorySaved?'整片领地已存本机':'存储已满 · 请导出备份'):unsavedRegions.has(current)?'仅保存在本次会话':linked&&current===originKey?'分享场景':
     savedRegions.has(current)?'已存本机':'等待编辑';
   byId('save-label').textContent=status;
-  byId('territory-status').textContent=open?`领地 ${rx}, ${rz} · 共 ${keys.length} 块 · ${status}`:`起点领地 · ${status}`;
-  byId('territory-hint').textContent=open?'带 + 的箭头扩建一块地，其他箭头切换已扩建的地块。':'沿东、南、西、北扩建，每次增加一块可建造地形。';
+  byId('territory-status').textContent=open?`连续领地 · ${keys.length} 块 · ${status}`:`起点领地 · ${status}`;
+  byId('territory-hint').textContent=open?'可跨地块搭房、画路。右键拖动平移，+ 箭头向外扩建。':'沿东、南、西、北扩建，每次增加一块可建造地形。';
   byId('open-territory').hidden=open;
   byId('territory-picker').hidden=!open;
   const select=byId('territory-select');
@@ -458,15 +494,17 @@ function syncTerritory(){
   }
 }
 function sync(){
+  open=Boolean(world.regions);
+  if(open&&!world.regions[tileKey(rx,rz)]){rx=rz=0;viewport?.focusRegion(0,0);}
   nextId=Math.max(0,...world.objects.map(o=>o.id),...world.strokes.map(o=>o.id))+1;
-  const biome=biomes[biomeOf(world)];
+  const biome=biomes[biomeOf(world.regions?.[tileKey(rx,rz)]??world)];
   byId('plot-title').textContent=open&&(rx||rz)?biome.label:themes[world.theme].label;
   byId('biome-name').textContent=biome.label;
   byId('biome-detail').textContent=biome.detail;
   byId('atlas-controls').hidden=!open;
-  byId('atlas-coord').textContent=`X ${rx} / Z ${rz}`;
+  byId('atlas-coord').textContent=`视野 ${rx}, ${rz}`;
   byId('map-mode').setAttribute('aria-pressed',open);
-  byId('map-label').textContent=open?'回到起点沙盘':'扩建领地';
+  byId('map-label').textContent=open?'起点视角':'扩建领地';
   syncTerritory();
   byId('motion').setAttribute('aria-pressed',motion);
   byId('motion').textContent=motion?'动态开':'动态关';
@@ -479,7 +517,7 @@ function sync(){
   byId('undo').disabled=before.length===0;
   byId('redo').disabled=after.length===0;
   for(const b of document.querySelectorAll('[data-world]')) b.setAttribute('aria-pressed',world[b.dataset.world]===b.dataset.value);
-  viewport?.update(world,open?{x:rx,z:rz,read:readRegion,claimed}:null);
+  viewport?.update(world,open?{x:rx,z:rz,claimed,continuous:true}:null);
   showMode();
   renderInspector();
   renderGuide();
@@ -510,61 +548,34 @@ function history(redo=false){
   sync();
   announce(redo?'已重做':'已撤销');
 }
-function stashHistory(){
-  if(!before.length&&!after.length)return;
-  edits.set(tileKey(rx,rz),{before,after});
-  if(edits.size>32)edits.delete(edits.keys().next().value);
-}
-function restoreHistory(){
-  const history=edits.get(tileKey(rx,rz));
-  before=history?.before??[];
-  after=history?.after??[];
-}
 function travel(dx,dz,follow=false){
-  if(!open||(!dx&&!dz)||!Number.isSafeInteger(rx+dx)||!Number.isSafeInteger(rz+dz))return;
-  if(!claimed(rx+dx,rz+dz)){
-    if(!follow)announce('用画布右上角带 + 的方向箭头扩建这块地');
-    return;
-  }
-  if(mode==='walk'&&!follow){endExploring();mode='camera';}
-  cancelDraft();
-  stashHistory();
-  selected=null;
-  rx+=dx;rz+=dz;
-  world=readRegion(rx,rz);
-  restoreHistory();
-  if(follow)viewport.shiftRegion(dx,dz);
-  sync();
-  if(!follow)viewport?.reset();
+  if(!open||!Number.isSafeInteger(rx+dx)||!Number.isSafeInteger(rz+dz))return;
+  const x=rx+dx,z=rz+dz;
+  if(!claimed(x,z))return;
+  rx=x;rz=z;
+  const meta=world.regions[tileKey(rx,rz)],biome=biomes[biomeOf(meta)];
+  byId('biome-name').textContent=biome.label;byId('biome-detail').textContent=biome.detail;
+  byId('plot-title').textContent=themes[meta.theme].label;
+  if(!follow){cancelDraft();viewport?.focusRegion(rx,rz);}
+  syncTerritory();byId('atlas-coord').textContent=`视野 ${rx}, ${rz}`;
   rememberLocation();
-  announce(`已切换到领地 ${rx}, ${rz}`);
 }
 function openNeighbor(button){
-  const [dx,dz]=button.dataset.move.split(',').map(Number);
-  const x=rx+dx,z=rz+dz;
+  const [dx,dz]=button.dataset.move.split(',').map(Number),x=rx+dx,z=rz+dz;
   if(!Number.isSafeInteger(x)||!Number.isSafeInteger(z))return;
-  const expanding=!claimed(x,z);
-  let stored=true;
-  if(expanding)stored=persistRegion(tileKey(x,z),readRegion(x,z));
-  switchMode('build');
-  travel(dx,dz);
-  if(expanding)announce(stored?`已向${directions[button.dataset.move]}扩建，可在新领地建造`:'已扩建，本机存储不可用，本次会话内保留');
+  if(!claimed(x,z)){
+    const next=wildTile('LINQI-ATLAS',x,z);
+    commit(appendRegion(world,next,x,z));
+    announce(territorySaved?'已连通新领地，可直接跨边界建造':'已扩建，存储已满，请导出领地备份');
+  }
+  switchMode('build');travel(dx,dz);
 }
 function toggleMap(){
-  endExploring();
-  cancelDraft();
-  stashHistory();
-  selected=null;
-  open=!open;
-  rx=rz=0;
-  world=origin;
-  restoreHistory();
-  mode='build';
-  sync();
-  renderCatalog();
-  viewport?.reset();
-  rememberLocation();
-  announce(open?'点击画布右上角带 + 的方向箭头扩建领地':'已回到起点沙盘');
+  if(open){travel(-rx,-rz);viewport?.reset();return;}
+  endExploring();cancelDraft();selected=null;
+  makeContinuous();open=true;rx=rz=0;mode='build';
+  save();sync();renderCatalog();viewport?.reset();
+  announce('领地已连通。用 + 箭头扩建，可跨边界搭房、画路');
 }
 function switchMode(next){
   if(mode==='walk'&&next!=='walk')endExploring();
@@ -588,6 +599,11 @@ function overlap(a,b){
 function validObject(o){
   const def=items[o.type],house=isHouse(o);
   if(def.category==='animal')return viewport.canPlace(o);
+  const corners=footprint(o,.24);
+  for(let j=0;j<4;j++){
+    const a=corners[j],b=corners[(j+1)%4],steps=Math.ceil(Math.hypot(a[0]-b[0],a[1]-b[1])/.3);
+    for(let i=0;i<=steps;i++)if(!inBounds(a[0]+(b[0]-a[0])*i/steps,a[1]+(b[1]-a[1])*i/steps,.05))return false;
+  }
   const wet=viewport.depth(o.x,o.z);
   if(def.form==='lily')return inBounds(o.x,o.z,.2)&&wet>.68;
   const bridge=def.form==='bridge';
@@ -655,14 +671,18 @@ function addBrushPoint(p){
   const step=clamp(width*.21,.27,.49);
   if(distance<step||points.length>=MAX_POINTS) return;
   const count=Math.min(MAX_POINTS-points.length,Math.ceil(distance/step),32);
-  for(let i=1;i<=count;i++) points.push([round(x+(p.x-x)*i/count),round(z+(p.z-z)*i/count)]);
+  for(let i=1;i<=count;i++){
+    const xx=round(x+(p.x-x)*i/count),zz=round(z+(p.z-z)*i/count);
+    if(!inBounds(xx,zz,width/2))break;
+    points.push([xx,zz]);
+  }
 }
 function down(p){
   if(!p) return;
   if(mode==='spawn'){startExploring(p.x,p.z);return;}
   if(mode==='walk')return;
   if(open&&!inBounds(p.x,p.z,.08)){
-    announce('用右上角方向箭头或下方领地清单切换编辑区');
+    announce('这里还未扩建，用右上角 + 箭头连通新领地');
     return;
   }
   if(mode==='erase'){erase(p);return;}
@@ -681,11 +701,12 @@ function down(p){
   if(!inBounds(p.x,p.z,.11)) return;
   const def=items[active];
   if(def.brush){
-    if(world.strokes.length>=MAX_STROKES){announce('已达到此沙盘的笔迹上限');return;}
+    if(!inBounds(p.x,p.z,width/2)){announce('笔刷需要完整落在已扩建的领地内');return;}
+    if(world.strokes.length>=MAX_STROKES*(Object.keys(world.regions??{}).length||1)){announce('当前领地笔迹已满，扩建可增加容量');return;}
     draft={kind:'brush',stroke:{id:nextId,type:active,w:width,p:[[round(p.x),round(p.z)]]}};
     viewport.showStroke(draft.stroke);
   }else{
-    if(world.objects.length>=MAX_OBJECTS){announce('已达到此沙盘的物件上限');return;}
+    if(world.objects.length>=MAX_OBJECTS*(Object.keys(world.regions??{}).length||1)){announce('当前领地物件已满，扩建可增加容量');return;}
     const object=createShape(active,p.x,p.z);
     draft={kind:'create',start:p,object};
     viewport.showObject(object,null,validObject(object));
@@ -761,6 +782,7 @@ catch(error){
 }
 sync();
 viewport?.motion(motion);
+preloadModelPack(()=>viewport?.refreshModels());
 renderCatalog();
 
 for(const key of Object.keys(toolLabels)) byId('mode-'+key).addEventListener('click',()=>switchMode(key));
@@ -825,7 +847,13 @@ byId('load-theme').addEventListener('click',()=>{
   selected=null;
   const name=byId('theme').value;
   if(mode==='walk'||mode==='spawn'){endExploring();mode='build';}
-  commit(preset(name));
+  if(world.regions){
+    const key=tileKey(rx,rz),local=preset(name),[sx,sz]=[rx*30,rz*22.8];
+    const regions={...world.regions};delete regions[key];
+    const base={...world,regions,objects:world.objects.filter(o=>regionAt(o.x,o.z).join(',')!==key),
+      strokes:world.strokes.filter(s=>!s.p.every(([x,z])=>regionAt(x,z).join(',')===key))};
+    commit(appendRegion(base,local,rx,rz));
+  }else commit(preset(name));
   viewport?.reset();
   announce(`已载入${themes[name].label}，可撤销`);
 });
@@ -914,9 +942,30 @@ document.addEventListener('keydown',e=>{
   if(['delete','backspace'].includes(key)&&mode==='select'&&selected!==null){e.preventDefault();removeObject(selected);}
 });
 byId('share').addEventListener('click',async()=>{
+  if(world.regions){
+    const blob=new Blob([JSON.stringify(territoryEnvelope(world))],{type:'application/json'});
+    const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='linqi-territory.json';a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),2000);announce('整片领地已导出，包含所有跨区建筑与道路');return;
+  }
   const href=worldLink(world);
   try{await navigator.clipboard.writeText(href);announce(open?'已复制当前领地链接':'设计链接已复制');}
   catch{window.prompt('复制设计链接',href);}
+});
+byId('quality').addEventListener('change',e=>{
+  viewport?.quality(e.target.value);
+  try{localStorage.setItem('linqi-quality',e.target.value);}catch{}
+});
+try{const q=localStorage.getItem('linqi-quality');if(['auto','low','balanced','high'].includes(q)){byId('quality').value=q;viewport?.quality(q);}}catch{}
+byId('import-world').addEventListener('click',()=>byId('import-file').click());
+byId('import-file').addEventListener('change',async e=>{
+  const file=e.target.files[0];if(!file)return;
+  try{
+    if(file.size>25*1024*1024)throw new Error('large');
+    const next=normalizeTerritory(JSON.parse(await file.text()));if(!next)throw new Error('invalid');
+    endExploring();cancelDraft();selected=null;mode='build';open=true;rx=rz=0;
+    commit(next);viewport?.reset();announce('已导入整片领地，可撤销恢复之前的设计');
+  }catch{announce('无法导入，请选择林栖导出的有效领地 JSON 文件');}
+  e.target.value='';
 });
 byId('snapshot').addEventListener('click',async()=>{
   if(!viewport)return;

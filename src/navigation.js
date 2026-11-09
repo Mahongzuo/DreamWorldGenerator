@@ -4,7 +4,7 @@ import {bridgeRise} from './asset-models.js';
 const size=3;
 const key=(x,z)=>Math.floor(x/size)+','+Math.floor(z/size);
 export function createNavigation(world,field,region,trees,bridges){
-  const grid=new Map(), deckGrid=new Map(), terrainBounds=region?tileInside:inside;
+  const grid=new Map(), deckGrid=new Map(), terrainBounds=region?.bounds??(region?tileInside:inside);
   const obstacles=world.objects.filter(o=>isSolid(o)||isTree(o.type));
   const crossings=obstacles.filter(o=>items[o.type].form==='bridge');
   const allTrees=[...trees,...obstacles.filter(o=>isTree(o.type)).map(o=>({x:o.x,z:o.z,r:o.w*.10,id:o.id,type:o.type,crown:o.w*.62}))];

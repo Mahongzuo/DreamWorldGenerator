@@ -1,0 +1,78 @@
+{
+  "generator": "Blender 4.5 · original procedural sculptures",
+  "license": "Original project assets",
+  "assets": [
+    {
+      "id": "pack-pavilion",
+      "width": 4.8,
+      "depth": 4.8,
+      "category": "house",
+      "triangles": 2450,
+      "meshes": 1,
+      "bytes": 220628
+    },
+    {
+      "id": "pack-windmill",
+      "width": 5.4,
+      "depth": 3.7,
+      "category": "house",
+      "triangles": 2058,
+      "meshes": 2,
+      "bytes": 209772
+    },
+    {
+      "id": "pack-greenhouse",
+      "width": 4.7,
+      "depth": 4.2,
+      "category": "house",
+      "triangles": 1400,
+      "meshes": 1,
+      "bytes": 136824
+    },
+    {
+      "id": "pack-fox",
+      "width": 0.82,
+      "depth": 0.82,
+      "category": "animal",
+      "triangles": 1148,
+      "meshes": 7,
+      "bytes": 170748
+    },
+    {
+      "id": "pack-red-panda",
+      "width": 0.82,
+      "depth": 0.82,
+      "category": "animal",
+      "triangles": 1580,
+      "meshes": 7,
+      "bytes": 232500
+    },
+    {
+      "id": "pack-ginkgo",
+      "width": 1.7,
+      "depth": 1.7,
+      "category": "plant",
+      "triangles": 766,
+      "meshes": 1,
+      "bytes": 98440
+    },
+    {
+      "id": "pack-basalt",
+      "width": 2.1,
+      "depth": 1.9,
+      "category": "decor",
+      "triangles": 600,
+      "meshes": 1,
+      "bytes": 58808
+    },
+    {
+      "id": "pack-karst",
+      "width": 2.6,
+      "depth": 1.4,
+      "category": "decor",
+      "triangles": 1180,
+      "meshes": 1,
+      "bytes": 164200
+    }
+  ]
+}

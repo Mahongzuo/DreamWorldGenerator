@@ -49,7 +49,7 @@ export const items = Object.fromEntries(Object.entries(catalog).flatMap(([catego
 export const waterAnimal=o=>['duck','goose','swan','fish'].includes(items[o.type]?.form);
 export const flyingAnimal=o=>['owl','swallow','kingfisher','butterfly','dragonfly','bee'].includes(items[o.type]?.form);
 export const isTree=id=>items[id]?.category==='plant'&&['针叶树','阔叶树'].includes(items[id].family);
-export const isSolid=o=>items[o.type]?.category==='house'||['rock','stone-wall','standing-stone','well'].includes(o.type);
+export const isSolid=o=>items[o.type]?.category==='house'||['rock','stone-wall','standing-stone','well','pack-basalt','pack-karst'].includes(o.type);
 
 export const themes = {
   pine: {label:'松溪谷', description:'雪松木屋与清蓝溪流', colors:['#8b9a59','#a7ae72','#5e8157','#77844e'], sky:'#d5e3ce', growth:'pine'},
@@ -132,7 +132,7 @@ export function inFootprint(x,z,object,padding=0) {
 
 const finite = (value, fallback) => Number.isFinite(value) ? value : fallback;
 const coord = (x,limit) => round(clamp(finite(x,0),-limit,limit));
-export function normalize(data) {
+export function normalize(data, limits={}) {
   if (!data || data.v !== 2 || !Object.hasOwn(themes,data.theme) || !Array.isArray(data.objects) || !Array.isArray(data.strokes)) return null;
   const ids = new Set();
   const withId = (entry) => {
@@ -144,9 +144,9 @@ export function normalize(data) {
     felled:Array.isArray(data.felled)?[...new Set(data.felled.filter(k=>Number.isInteger(k)&&k>=0&&k<190))].slice(0,190):[],
     season:['summer','autumn','winter'].includes(data.season) ? data.season : 'summer',
     light:['day','gold','night'].includes(data.light) ? data.light : 'day',
-    objects:data.objects.slice(0,MAX_OBJECTS).filter(o=>o && Object.hasOwn(items,o.type) && !items[o.type].brush && withId(o)).map(o=>{
+    objects:data.objects.slice(0,limits.maxObjects??MAX_OBJECTS).filter(o=>o && Object.hasOwn(items,o.type) && !items[o.type].brush && withId(o)).map(o=>{
       const house = items[o.type].category === 'house';
-      const object = obj(o.id,o.type,coord(o.x,LAND.x),coord(o.z,LAND.z),round(clamp(finite(o.w,items[o.type].width),house ? 2.4 : .35,house ? 8 : 3)),
+      const object = obj(o.id,o.type,coord(o.x,limits.coordinateLimit??LAND.x),coord(o.z,limits.coordinateLimit??LAND.z),round(clamp(finite(o.w,items[o.type].width),house ? 2.4 : .35,house ? 8 : 3)),
         round(clamp(finite(o.d,items[o.type].depth ?? items[o.type].width),house ? 2.2 : .35,house ? 7 : 3)),round(finite(o.a,0) % (Math.PI * 2)));
       if (['cedar','alpine','shed'].includes(o.type)) {
         object.wood = ['cedar','dark','pale'].includes(o.wood) ? o.wood : 'cedar';
@@ -155,8 +155,8 @@ export function normalize(data) {
       }
       return object;
     }),
-    strokes:data.strokes.slice(0,MAX_STROKES).filter(s=>s && Object.hasOwn(items,s.type) && items[s.type].brush && Array.isArray(s.p) && s.p.length && withId(s)).map(s=>
-      line(s.id,s.type,s.p.slice(0,MAX_POINTS).filter(Array.isArray).map(p=>[coord(p[0],LAND.x),coord(p[1],LAND.z)]),round(clamp(finite(s.w,items[s.type].width),.55,7)))).filter(s=>s.p.length)
+    strokes:data.strokes.slice(0,limits.maxStrokes??MAX_STROKES).filter(s=>s && Object.hasOwn(items,s.type) && items[s.type].brush && Array.isArray(s.p) && s.p.length && withId(s)).map(s=>
+      line(s.id,s.type,s.p.slice(0,MAX_POINTS).filter(Array.isArray).map(p=>[coord(p[0],limits.coordinateLimit??LAND.x),coord(p[1],limits.coordinateLimit??LAND.z)]),round(clamp(finite(s.w,items[s.type].width),.55,7)))).filter(s=>s.p.length)
   };
 }
 

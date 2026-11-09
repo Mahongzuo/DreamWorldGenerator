@@ -1,0 +1,46 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><title>连续领地渲染回归</title><style>body{font:16px system-ui;background:#eff3e8;color:#27402c;padding:24px}pre{white-space:pre-wrap}canvas{max-width:100%}</style><h1>连续领地渲染回归</h1><pre id="result">运行中…</pre><script type="module">
+import * as T from 'three';
+import {createKit,disposeGroup} from '../src/model.js';
+import {createContinuousLand} from '../src/continuous-land.js';
+import {joinRegions,contains,appendRegion} from '../src/territory.js';
+import {wildTile,items} from '../src/sandbox-state.js';
+const checks=[],assert=(ok,label)=>{if(!ok)throw Error(label);checks.push('PASS '+label);};
+try{
+ const entries=[];for(let z=-2;z<=2;z++)for(let x=-2;x<=2;x++)entries.push([x,z,wildTile('QA',x,z)]);
+ let world=joinRegions(entries),id=1000;
+ world={...world,strokes:[{id:id++,type:'hill',w:6,p:[[10,0],[15,0],[20,0]]},{id:id++,type:'brook',w:3,p:[[12,7],[15,7],[18,7]]},{id:id++,type:'stonepath',w:1,p:[[10,-4],[15,-4],[20,-4]]}],objects:[]};
+ const kit=createKit(),terrain=createContinuousLand(kit),start=performance.now();
+ const group=terrain.update(world,{x:0,z:0},'balanced');
+ const initialMs=performance.now()-start;
+ assert(group.children.length===9,'25 块存档只加载视野附近 9 块地形');
+ const seam=(group)=>{
+   const l=group.children.find(c=>c.position.x===0&&c.position.z===0),r=group.children.find(c=>c.position.x===30&&c.position.z===0);
+   const a=l.userData.surface.geometry.attributes.position,b=r.userData.surface.geometry.attributes.position;
+   const left=[],right=[];
+   for(let i=0;i<a.count;i++)if(Math.abs(a.getX(i)-15)<.001)left.push([a.getZ(i),a.getY(i)]);
+   for(let i=0;i<b.count;i++)if(Math.abs(b.getX(i)+15)<.001)right.push([b.getZ(i),b.getY(i)]);
+   assert(left.length===right.length,'相邻地形边缘顶点数量一致');
+   assert(left.every(([z,h],i)=>Math.abs(z-right[i][0])<1e-5&&Math.abs(h-right[i][1])<1e-5),'丘陵、水系跨界后的网格高度连续');
+ };
+ seam(group);
+ assert(group.userData.field.paint(14.9,-4)==='stonepath'&&group.userData.field.paint(15.1,-4)==='stonepath','道路连续覆盖接缝两侧');
+ assert(group.userData.navigation.sweep(14,-4,16,-4,.2,'land'),'可沿道路跨界行走');
+ const trees=group.userData.navigation.trees.map(t=>[t.region,t.key,t.x,t.z]);
+ const before=group.children.map(c=>c.uuid);
+ terrain.update(world,{x:0,z:0},'balanced');
+ assert(group.children.every((c,i)=>c.uuid===before[i]),'未修改的地形复用 GPU 网格');
+ const t=performance.now();terrain.update(world,{x:0,z:0},'low');const lowMs=performance.now()-t;
+ seam(group);
+ assert(JSON.stringify(trees)===JSON.stringify(group.userData.navigation.trees.map(t=>[t.region,t.key,t.x,t.z])),'画质切换不改变树木碰撞位置');
+ let tris=0;group.traverse(m=>{if(m.isMesh)tris+=(m.geometry.index?.count??m.geometry.attributes.position.count)/3*(m.isInstancedMesh?m.count:1)});
+ terrain.update(world,{x:1,z:1},'low');
+ assert(group.children.length===9,'移动视野后释放远处区块');
+ const outside=group.children.every(c=>Math.abs(c.position.x-30)<=30&&Math.abs(c.position.z-22.8)<=22.81);
+ assert(outside,'绘制集合随视野移动');
+ const renderer=new T.WebGLRenderer({antialias:false});renderer.setSize(800,480);document.body.append(renderer.domElement);
+ const scene=new T.Scene();scene.background=new T.Color('#dce8d6');scene.add(group,new T.HemisphereLight(0xffffff,0x607044,3));
+ const camera=new T.PerspectiveCamera(50,800/480,.1,250);camera.position.set(60,55,85);camera.lookAt(30,0,22.8);renderer.render(scene,camera);
+ const gl=renderer.getContext(),ext=gl.getExtension('WEBGL_debug_renderer_info');
+ document.querySelector('#result').textContent=checks.join('\n')+'\n\n'+JSON.stringify({initialTerrainMs:Math.round(initialMs),lowTerrainMs:Math.round(lowMs),lowResidentTriangles:tris,draws:renderer.info.render.calls,drawnTriangles:renderer.info.render.triangles,gpu:ext?gl.getParameter(ext.UNMASKED_RENDERER_WEBGL):gl.getParameter(gl.RENDERER)},null,2);
+}catch(error){document.querySelector('#result').textContent=checks.join('\n')+'\nFAIL '+error.stack;console.error(error);}
+</script></html>

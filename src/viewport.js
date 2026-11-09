@@ -7,6 +7,9 @@ import {buildEcology} from './ecology.js';
 import {architectureHeight} from './asset-models.js';
 import {buildAvatar} from './creatures.js';
 import {createAnimalCrowd,makeWander,wander} from './navigation.js';
+import {createContinuousLand} from './continuous-land.js';
+import {regionAt} from './territory.js';
+import {animatePackModel} from './model-pack.js';
 import {hoofGround} from './deer.js';
 
 const lighting = {
@@ -16,9 +19,11 @@ const lighting = {
 };
 
 export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
+  const modest=matchMedia('(pointer: coarse)').matches||(navigator.deviceMemory??8)<=4||(navigator.hardwareConcurrency??8)<=4;
+  let quality=modest?'low':'balanced';
   const renderer=new T.WebGLRenderer({antialias:true,alpha:true,powerPreference:'high-performance'});
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio,1.65));
-  renderer.shadowMap.enabled=true;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio,modest?1:1.4));
+  renderer.shadowMap.enabled=!modest;
   renderer.shadowMap.type=T.PCFShadowMap;
   renderer.shadowMap.autoUpdate=false;
   renderer.toneMapping=T.ACESFilmicToneMapping;
@@ -44,13 +49,13 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
   controls.maxZoom=4.2;
   controls.autoRotateSpeed=.66;
   controls.mouseButtons.RIGHT=T.MOUSE.ROTATE;
-  controls.mouseButtons.MIDDLE=T.MOUSE.PAN;
+  controls.mouseButtons.MIDDLE=T.MOUSE.ROTATE;
   camera.position.copy(home);
   controls.update();
 
   const sky=new T.HemisphereLight(),sun=new T.DirectionalLight();
   sun.castShadow=true;
-  sun.shadow.mapSize.set(2048,2048);
+  sun.shadow.mapSize.set(1024,1024);
   Object.assign(sun.shadow.camera,{left:-19,right:19,top:17,bottom:-17,near:.1,far:62});
   sun.shadow.bias=-.00019;
   sun.shadow.normalBias=.044;
@@ -78,20 +83,20 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
   corners.frustumCulled=false;
   corners.renderOrder=13;
   const borderPoints=80;
-  const border=new T.LineLoop(new T.BufferGeometry().setAttribute('position',
+  const border=new T.LineSegments(new T.BufferGeometry().setAttribute('position',
     new T.BufferAttribute(new Float32Array(borderPoints*3),3)),
     new T.LineDashedMaterial({color:'#fff3cb',transparent:true,opacity:.63,dashSize:.29,gapSize:.22,depthWrite:false}));
   border.frustumCulled=false;
   border.visible=false;
   scene.add(marker,footprintLine,stamps,corners,border);
 
-  let pending=0,last=0,lifeTimer=0,time=0,metric='',paused=false,land,world,region,ecology,previewObject,hiddenObject;
+  let pending=0,last=0,lifeTimer=0,time=0,lastShadow=0,metric='',paused=false,land,world,region,ecology,previewObject,hiddenObject;
   let gesture=null,orbitMode=false,living=false,playing=false,player,lookDrag,nearKey='';
   let yaw=Math.PI,lift=2.55;
   const movement=new Set();
   const cameraGoal=new T.Vector3(),lookGoal=new T.Vector3();
   let crowd=createAnimalCrowd();
-  const surroundings=new Map();
+  const continuousLand=createContinuousLand(kit);
   const objects=new Map();
   const raycaster=new T.Raycaster(),ndc=new T.Vector2(),plane=new T.Plane(new T.Vector3(0,1,0),0);
   const hit=new T.Vector3(), localHit=new T.Vector3(), inverse=new T.Matrix4(), localRay=new T.Ray(), box=new T.Box3();
@@ -113,15 +118,17 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     last=now;
     if(playing)walk(delta);
     else controls.update(delta);
-    if(region&&orbitMode&&!playing){
-      const dx=Math.floor((controls.target.x+LAND.x)/(LAND.x*2));
-      const dz=Math.floor((controls.target.z+LAND.z)/(LAND.z*2));
-      if((dx||dz)&&region.claimed(region.x+dx,region.z+dz))onRegion(dx,dz,true);
+    if(region?.continuous&&!playing){
+      const [x,z]=regionAt(controls.target.x,controls.target.z);
+      if((x!==region.x||z!==region.z)&&region.claimed(x,z)){
+        onRegion(x-region.x,z-region.z,true);update(world,{...region,x,z});
+      }
     }
     if((living||playing)&&ecology){
       if(living){time+=delta;kit.time.value=time;}
       ecology.step(time,world.light,living?delta:0);
       stepAnimals(living?delta:0);
+      if(renderer.shadowMap.enabled&&living&&time-lastShadow>.25){renderer.shadowMap.needsUpdate=true;lastShadow=time;}
     }
     draw();
     if(playing||controls.autoRotate) schedule();
@@ -293,65 +300,24 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     schedule();
   }
   function updateBorder(){
-    if(!region)return;
-    const position=border.geometry.attributes.position, field=land.userData.field;
-    const edge=[[-LAND.x,-LAND.z],[-LAND.x,LAND.z],[LAND.x,LAND.z],[LAND.x,-LAND.z]];
-    const perSide=borderPoints/4;
-    for(let j=0;j<4;j++){
-      const a=edge[j], b=edge[(j+1)%4];
-      for(let i=0;i<perSide;i++){
-        const x=T.MathUtils.lerp(a[0],b[0],i/perSide), z=T.MathUtils.lerp(a[1],b[1],i/perSide);
-        position.setXYZ(j*perSide+i,x,field.height(x,z)+.051,z);
-      }
-    }
-    position.needsUpdate=true;
-    border.computeLineDistances();
-  }
-  function fillNeighbors(){
-    const wanted=new Set();
-    if(region){
-      for(let dz=-1;dz<=1;dz++)for(let dx=-1;dx<=1;dx++){
-        if(dx===0&&dz===0)continue;
-        const x=region.x+dx,z=region.z+dz,key=tileKey(x,z);
-        wanted.add(key);
-        const next=region.read(x,z);
-        let entry=surroundings.get(key);
-        if(entry?.world!==next){
-          if(entry)disposeGroup(entry.land);
-          const adjacent=buildLand(kit,next,{x,z,coarse:true});
-          const nearbyCrowd=createAnimalCrowd();
-          for(const o of next.objects){
-            const animal=items[o.type].category==='animal';
-            const a=animal?makeWander(adjacent.userData.navigation,o.x,o.z,animalRadius(o),typeOf(o),o.a,2,nearbyCrowd):null;
-            if(animal&&!a)continue;
-            const group=buildObject(kit,o,next,adjacent.userData.field);
-            if(a)group.position.set(a.x,objectHeight(adjacent.userData.field,{...o,x:a.x,z:a.z}),a.z);
-            group.traverse(m=>{if(m.isMesh)m.castShadow=false;});
-            adjacent.add(group);
-          }
-          scene.add(adjacent);
-          entry={land:adjacent,world:next};
-          surroundings.set(key,entry);
+    if(!region?.continuous)return;
+    const points=[],f=land.userData.field;
+    for(const key of Object.keys(worldForBorder.regions)){
+      const [rx,rz]=key.split(',').map(Number);
+      if(Math.abs(rx-region.x)>1||Math.abs(rz-region.z)>1)continue;
+      const [sx,sz]=tileShift(rx,rz);
+      for(const [dx,dz,a,b] of [[0,-1,[-LAND.x,-LAND.z],[LAND.x,-LAND.z]],[1,0,[LAND.x,-LAND.z],[LAND.x,LAND.z]],[0,1,[LAND.x,LAND.z],[-LAND.x,LAND.z]],[-1,0,[-LAND.x,LAND.z],[-LAND.x,-LAND.z]]]){
+        if(region.claimed(rx+dx,rz+dz))continue;
+        for(let i=0;i<24;i++)for(const t of [i/24,(i+1)/24]){
+          const x=sx+T.MathUtils.lerp(a[0],b[0],t),z=sz+T.MathUtils.lerp(a[1],b[1],t);
+          points.push(x,f.height(x,z)+.07,z);
         }
-        const [sx,sz]=tileShift(dx,dz);
-        entry.land.position.set(sx,0,sz);
       }
     }
-    for(const [key,entry] of surroundings){
-      if(!wanted.has(key)){disposeGroup(entry.land);surroundings.delete(key);}
-    }
+    border.geometry.dispose();border.geometry=new T.BufferGeometry();
+    border.geometry.setAttribute('position',new T.Float32BufferAttribute(points,3));border.computeLineDistances();
   }
-  function shiftRegion(dx,dz){
-    const [x,z]=tileShift(dx,dz);
-    camera.position.x-=x;camera.position.z-=z;
-    controls.target.x-=x;controls.target.z-=z;
-    if(player&&playing){
-      player.x-=x;player.z-=z;
-      follow.position.x-=x;follow.position.z-=z;
-      cameraGoal.x-=x;cameraGoal.z-=z;
-    }
-    controls.update();
-  }
+  let worldForBorder;
   function update(next,nextRegion=null){
     clearPreview();
     const regionChange=region?.x!==nextRegion?.x||region?.z!==nextRegion?.z;
@@ -364,35 +330,36 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
       const old=oldLayout[i];
       return o!==old&&['x','z','w','d','a','type'].some(key=>o[key]!==old[key]);
     });
-    const landChange=!world||regionChange||terrainObjectsChanged||['theme','season','seed','strokes','biome','felled'].some(key=>next[key]!==world[key]);
+    const landChange=!world||regionChange||terrainObjectsChanged||['theme','season','seed','strokes','biome','felled','regions'].some(key=>next[key]!==world[key]);
     const lightChange=!world||next.light!==world.light;
     if(regionChange){
       controls.maxPolarAngle=region?1.13:Math.PI*.48;
-      controls.minZoom=region ? .83 : .60;
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio,region?1.30:1.65));
+      controls.minZoom=region ? .75 : .60;
+      controls.mouseButtons.RIGHT=region?T.MOUSE.PAN:T.MOUSE.ROTATE;
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio,quality==='low'?1:quality==='high'?1.65:1.3));
       scene.fog=region?new T.Fog('#dce8d6',46,81):null;
-      fillNeighbors();
       resize();
     }
     if(landChange){
       const oldLand=land;
-      land=buildLand(kit,next,region);
+      land=region?.continuous?continuousLand.update(next,region,quality):buildLand(kit,next,region);
       scene.add(land);
-      if(oldLand)disposeGroup(oldLand);
-      updateBorder();
+      if(oldLand&&oldLand!==land)disposeGroup(oldLand);
+      worldForBorder=next;updateBorder();
       ecology?.dispose();
       crowd=createAnimalCrowd();
     }
     if(landChange||objectsChanged){
       for(const [id,entry] of objects){
-        const o=next.objects.find(o=>o.id===id);
-        if(o!==entry.object||regionChange||next.season!==world?.season||next.seed!==world?.seed){
+        const o=next.objects.find(o=>o.id===id&&(!region?.continuous||land.userData.visible(o)));
+        if(o!==entry.object||(!region?.continuous&&regionChange)||next.season!==world?.season||next.seed!==world?.seed){
           entry.agent?.crowd?.remove(entry.agent);
           disposeGroup(entry.group);
           objects.delete(id);
         }
       }
       for(const o of next.objects){
+        if(region?.continuous&&!land.userData.visible(o))continue;
         const entry=objects.get(o.id);
         if(entry){
           if(items[o.type].category==='animal'){
@@ -409,14 +376,15 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
       }
     }
     if(landChange){
-      ecology=buildEcology(next,land.userData.field,region,land.userData.navigation,crowd);
+      ecology=buildEcology(region?.continuous?{...next,...next.regions[tileKey(region.x,region.z)],season:next.season,light:next.light,objects:next.objects,strokes:next.strokes.filter(s=>s.p.some(([x,z])=>Math.abs(x-region.x*30)<18&&Math.abs(z-region.z*22.8)<14))}:next,land.userData.field,region,land.userData.navigation,crowd);
       ecology.step(time,next.light);
       scene.add(ecology.group);
     }
-    if(lightChange){
+    if(lightChange||regionChange){
       const look=lighting[next.light];
       sky.color.set(look.sky);sky.groundColor.set(look.ground);sky.intensity=look.ambient;
       sun.color.set(look.sun);sun.intensity=look.power;sun.position.set(...look.position);
+      if(region?.continuous){const [sx,sz]=tileShift(region.x,region.z);sun.position.x+=sx;sun.position.z+=sz;sun.target.position.set(sx,0,sz);scene.add(sun.target);}
       renderer.toneMappingExposure=look.exposure;
       kit.materials.window.emissiveIntensity=look.glass;
       stage.dataset.light=next.light;
@@ -457,11 +425,11 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     border.visible=Boolean(region)&&!on&&!playing;
     cursor(null);
   }
-  const currentTile=()=>region?tileKey(region.x,region.z):'diorama';
+  const currentTile=()=>region?.continuous?'world':region?tileKey(region.x,region.z):'diorama';
   const typeOf=o=>waterAnimal(o)?'water':flyingAnimal(o)?'fly':'land';
   const animalRadius=o=>{
     const form=items[o.type].form;
-    const ratio=['deer','elk'].includes(form)?.94:['swan','heron','goose','bear','horse'].includes(form)?.90:
+    const ratio=['pack-fox','pack-red-panda'].includes(o.type)?1.25:['deer','elk'].includes(form)?.94:['swan','heron','goose','bear','horse'].includes(form)?.90:
       ['fox','raccoon','squirrel','cow','pig','owl','swallow','kingfisher','beaver'].includes(form)?.79:.72;
     return Math.max(.15,o.w*ratio);
   };
@@ -497,6 +465,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     const nav=land.userData.navigation;
     for(const entry of objects.values()){
       const {agent:a,object:o}=entry;
+      animatePackModel(entry.group,{delta:dt,speed:a?.speed??0,travel:a?.travel??0,time});
       if(a){
         wander(nav,a,dt,a.kind==='fly'?.75:a.kind==='water'?.50:.52+o.w*.16);
         placeAnimal(entry,time);
@@ -509,7 +478,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     if(!land)return false;
     const nav=land.userData.navigation;
     const reuse=x===undefined&&player?.tile===currentTile();
-    const safe=nav.find(x??(reuse?player.x:0.10),z??(reuse?player.z:5.45),.25,'land',4.5);
+    const safe=nav.find(x??(reuse?player.x:(region?.x??0)*30+.10),z??(reuse?player.z:(region?.z??0)*22.8+5.45),.25,'land',4.5);
     if(!safe)return false;
     player={...safe,tile:currentTile(),a:reuse?player.a:Math.PI,t:0,swing:0,y:nav.height(safe.x,safe.z)};
     yaw=player.a;lift=2.55;playing=true;
@@ -544,13 +513,6 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     let moved=false;
     const nav=land.userData.navigation;
     const can=(x,z)=>{
-      if(region&&(Math.abs(x)>LAND.x-.32||Math.abs(z)>LAND.z-.32)){
-        const dx=Math.floor((x+LAND.x)/(LAND.x*2)),dz=Math.floor((z+LAND.z)/(LAND.z*2));
-        if((dx||dz)&&!region.claimed(region.x+dx,region.z+dz))return false;
-        const edgeX=T.MathUtils.clamp(x,-LAND.x+.323,LAND.x-.323);
-        const edgeZ=T.MathUtils.clamp(z,-LAND.z+.323,LAND.z-.323);
-        return nav.valid(edgeX,edgeZ,.25);
-      }
       return nav.sweep(player.x,player.z,x,z,.25,'land');
     };
     if(Math.hypot(dx,dz)>.0001){
@@ -560,10 +522,11 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
         player.a=Math.atan2(xx,zz);moved=true;break;
       }
     }
-    if(region){
-      const rx=Math.floor((player.x+LAND.x)/(LAND.x*2));
-      const rz=Math.floor((player.z+LAND.z)/(LAND.z*2));
-      if(rx||rz)onRegion(rx,rz,true);
+    if(region?.continuous){
+      const [x,z]=regionAt(player.x,player.z);
+      if((x!==region.x||z!==region.z)&&region.claimed(x,z)){
+        onRegion(x-region.x,z-region.z,true);update(world,{...region,x,z});
+      }
     }
     const height=land.userData.navigation.height(player.x,player.z);
     player.y=dt?T.MathUtils.lerp(player.y,height,Math.min(1,dt*15)):height;
@@ -653,6 +616,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     camera.zoom=top ? .85 : 1;
     camera.updateProjectionMatrix();
     controls.target.copy(target);
+    if(region?.continuous){const [sx,sz]=tileShift(region.x,region.z);camera.position.x+=sx;camera.position.z+=sz;controls.target.x+=sx;controls.target.z+=sz;}
     controls.update();
     schedule();
   }
@@ -671,8 +635,28 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     schedule();
     return new Promise(resolve=>c.toBlob(resolve,'image/png'));
   }
-  return {update,cameraMode,reset,snapshot,clearPreview,cursor,showFootprint,showObject,showStroke,shiftRegion,
+  return {update,cameraMode,reset,snapshot,clearPreview,cursor,showFootprint,showObject,showStroke,
     beginWalk,endWalk,observe,chop,
+    focusRegion(x,z){
+      if(!region?.continuous)return;
+      const [sx,sz]=tileShift(x,z),dx=sx-controls.target.x,dz=sz-controls.target.z;
+      camera.position.x+=dx;camera.position.z+=dz;controls.target.x=sx;controls.target.z=sz;
+      controls.update();update(world,{...region,x,z});
+    },
+    refreshModels(){
+      if(!world)return;
+      for(const [id,entry] of objects)if(entry.object.type.startsWith('pack-')){entry.agent?.crowd?.remove(entry.agent);disposeGroup(entry.group);objects.delete(id);}
+      update({...world,objects:[...world.objects]},region);
+    },
+    quality(value){
+      quality=value==='auto'?(modest?'low':'balanced'):value;
+      renderer.shadowMap.enabled=quality!=='low';
+      sun.shadow.mapSize.set(quality==='high'?2048:1024,quality==='high'?2048:1024);
+      sun.shadow.map?.dispose();sun.shadow.map=null;
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio,quality==='low'?1:quality==='high'?1.65:1.3));
+      if(world)update({...world,strokes:[...world.strokes]},region);
+      schedule();
+    },
     move(key,on){if(on)movement.add(key);else movement.delete(key);schedule();},
     clearMovement(){movement.clear();},
     canPlace(o){

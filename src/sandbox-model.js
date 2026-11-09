@@ -4,6 +4,7 @@ import {baseHeight, biomeOf, biomes, continentHeight, contour, footprint, inFoot
 
 import {buildArchitecture, buildDecor, buildPlant} from './asset-models.js';
 import {buildCreature} from './creatures.js';
+import {createPackModel} from './model-pack.js';
 import {createNavigation} from './navigation.js';
 
 const SIZE = 320;
@@ -85,8 +86,8 @@ export function makeField(world,region) {
   const index = (x,z) => (Math.max(0,Math.min(SIZE-1,Math.floor(oz(z))))*SIZE+Math.max(0,Math.min(SIZE-1,Math.floor(ox(x)))))*4;
   const shift=region?tileShift(region.x,region.z):[0,0];
   const surface=region?(x,z)=>continentHeight(x+shift[0],z+shift[1]):baseHeight;
-  const level=region?surface(0,0)-.26:-.018;
-  const edgeFade=(x,z)=>region?T.MathUtils.clamp(Math.min(LAND.x-Math.abs(x),LAND.z-Math.abs(z))/.48,0,1):1;
+  const level=region?.continuous?.20:region?surface(0,0)-.26:-.018;
+  const edgeFade=(x,z)=>region&&!region.continuous?T.MathUtils.clamp(Math.min(LAND.x-Math.abs(x),LAND.z-Math.abs(z))/.48,0,1):1;
   const depth = (x,z) => {const i=index(x,z);return data[0][i+1]*data[0][i+3]/65025*edgeFade(x,z);};
   const type = (channel,x,z) => {
     const i=index(x,z);
@@ -99,7 +100,9 @@ export function makeField(world,region) {
     height(x,z) {
       const i=index(x,z);
       const top=items[grassIds[Math.round(data[1][i]/10)-1]];
-      const relief=top?.category==='terrain'?(top.depth??0)*data[1][i+1]*data[1][i+3]/65025*edgeFade(x,z):0;
+      const coverage=data[1][i+1]*data[1][i+3]/65025;
+      const profile=top?.form==='plateau'?Math.min(1,coverage*2.8):top?.form==='rock'?coverage**1.6:top?.form==='valley'?Math.sqrt(coverage):coverage;
+      const relief=top?.category==='terrain'?(top.depth??0)*profile*edgeFade(x,z):0;
       const ripples=top?.form==='dune'?relief*.16*Math.sin(x*2.1+z*.43):0;
       const ground=surface(x,z)+relief+ripples, wet=depth(x,z);
       return ground+Math.min(-.13,level-.37-ground)*wet;
@@ -170,7 +173,7 @@ function makeWater(kit,world,field,region) {
   for (let i=0;i<data.length;i+=4) {
     if (data[i+1]<170 || data[i+3]<142) continue;
     const n=i/4, x=n%SIZE, z=Math.floor(n/SIZE);
-    if(region && !tileInside((x/SIZE-.5)*LAND.x*2.18,(z/SIZE-.5)*LAND.z*2.18,.34)) continue;
+    if(region && !tileInside((x/SIZE-.5)*LAND.x*2.18,(z/SIZE-.5)*LAND.z*2.18,region.continuous?0:.34)) continue;
     scratch.copy(at(hues,Math.max(0,Math.round(data[i]/24)-1))).multiplyScalar(.78+.12*Math.sin(x*.145+z*.062)+random()*.11);
     scratch.getRGB(scratch,T.SRGBColorSpace);
     image.data[i]=scratch.r*255; image.data[i+1]=scratch.g*255; image.data[i+2]=scratch.b*255; image.data[i+3]=255;
@@ -276,7 +279,7 @@ function landscape(kit,world,field,region,trees,bridges) {
   const flora=world.biome?biome.growth:themes[world.theme].growth;
   const coarse=Boolean(region?.coarse);
   const limit=world.biome?biome.density:37;
-  const inBounds=(x,z,m)=>region?tileInside(x,z,m):inside(x,z,m);
+  const inBounds=(x,z,m)=>region?tileInside(x,z,region.continuous?0:m):inside(x,z,m);
   const houses=world.objects.filter(o=>items[o.type].category==='house');
   const clear=(x,z,padding)=>houses.some(o=>inFootprint(x,z,o,padding));
   const treeSites=[],treeRandom=randFrom(world.seed+'tree-sites'),felled=new Set(world.felled);
@@ -285,7 +288,7 @@ function landscape(kit,world,field,region,trees,bridges) {
     const angle=rng()*Math.PI*2,r=Math.sqrt(rng())*radius*contour(angle);
     return [Math.cos(angle)*r*LAND.x,Math.sin(angle)*r*LAND.z];
   };
-  for(let i=0;flora && i<190 && treeSites.length<(coarse?Math.ceil(limit*.55):limit);i++){
+  for(let i=0;flora && i<190 && treeSites.length<limit;i++){
     const [x,z]=sample(.96,treeRandom);
     const v=Math.hypot(x/LAND.x,z/LAND.z);
     if((!world.biome && (v<.6 || (z>1.5 && v<.84))) || field.depth(x,z)>.12 || field.type(2,x,z) || clear(x,z,1.1) ||
@@ -390,7 +393,7 @@ function landscape(kit,world,field,region,trees,bridges) {
 }
 
 function makeTileTerrain(world,field,region){
-  const count=62, rows=48;
+  const count=region.resolution??62, rows=count===32?24:48;
   const position=[],tint=[],index=[];
   const palette=(landColors[world.season]??(world.biome?biomes[world.biome].colors:themes[world.theme].colors)).map(color);
   const verge=color('#9da870'), [ox,oz]=tileShift(region.x,region.z);
@@ -401,8 +404,8 @@ function makeTileTerrain(world,field,region){
     const x=(i/count*2-1)*LAND.x,z=(j/rows*2-1)*LAND.z;
     const xx=x+ox,zz=z+oz;
     position.push(x,field.height(x,z),z);
-    const boundary=T.MathUtils.clamp(Math.min(LAND.x-Math.abs(x),LAND.z-Math.abs(z))/1.25,0,1);
-    const c=palette[0].clone().lerp(palette[1],.45+.39*Math.sin(xx*.32+zz*.42))
+    const boundary=region.continuous?1:T.MathUtils.clamp(Math.min(LAND.x-Math.abs(x),LAND.z-Math.abs(z))/1.25,0,1);
+    const c=region.tint?region.tint(x,z):palette[0].clone().lerp(palette[1],.45+.39*Math.sin(xx*.32+zz*.42))
       .lerp(palette[2],.23+.20*Math.cos(zz*.61-xx*.37)).lerp(verge,1-boundary);
     const g=field.type(1,x,z),w=field.type(0,x,z),r=field.type(2,x,z);
     if(g)c.lerp(at(grasses,g-1),boundary*.85);
@@ -425,7 +428,7 @@ function makeTileTerrain(world,field,region){
   return mesh;
 }
 export function buildLand(kit,world,region) {
-  const group=new T.Group(),field=makeField(world,region);
+  const group=new T.Group(),field=region?.field??makeField(world,region);
   const surface=region?makeTileTerrain(world,field,region):makeTerrain(world,field);
   const trees=[],bridges=[];
   group.add(surface,landscape(kit,world,field,region,trees,bridges));
@@ -437,7 +440,7 @@ export function buildLand(kit,world,region) {
   }
   if(world.strokes.some(s=>items[s.type].category==='water')) group.add(makeWater(kit,world,field,region));
   if(region?.coarse) group.traverse(mesh=>{if(mesh.isMesh)mesh.castShadow=false;});
-  group.userData={surface,field,navigation:createNavigation(world,field,region,trees,bridges)};
+  group.userData={surface,field,bridges,navigation:createNavigation(world,field,region,trees,bridges)};
   return group;
 }
 
@@ -624,8 +627,9 @@ export function objectHeight(field,o){
 }
 export function buildObject(kit,o,world,field) {
   const def=items[o.type], y=objectHeight(field,o);
-  let group;
-  if(o.type==='jiangnan'||o.type==='pavilion') group=oriental(kit,o);
+  let group=createPackModel(def,o);
+  if(group){}
+  else if(o.type==='jiangnan'||o.type==='pavilion') group=oriental(kit,o);
   else if(o.type==='tudor') group=tudor(kit,o);
   else if(o.type==='tower') group=tower(kit,o);
   else if(def.category==='house'&&!['cedar','alpine','shed'].includes(o.type))group=buildArchitecture(kit,o,def);

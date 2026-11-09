@@ -1,6 +1,6 @@
 import * as T from 'three';
 import {randFrom} from './model.js';
-import {biomeOf, inFootprint, items} from './sandbox-state.js';
+import {biomeOf, inFootprint, items, tileShift} from './sandbox-state.js';
 import {makeWander, wander} from './navigation.js';
 import {architectureHeight} from './asset-models.js';
 import {drawDeer,hoofGround} from './deer.js';
@@ -37,6 +37,7 @@ function meshOf(geometry,material,max){
 
 export function buildEcology(world,field,region,nav,crowd) {
   const group=new T.Group();
+  const [originX,originZ]=region?.continuous?tileShift(region.x,region.z):[0,0];
   const biome=biomeOf(world);
   const random=randFrom(world.seed+'wildlife');
   const color=new T.Color();
@@ -59,7 +60,7 @@ export function buildEcology(world,field,region,nav,crowd) {
   const findDry=(preferFlower=false)=>{
     let first;
     for(let i=0;i<76;i++){
-      const x=(random()*2-1)*10.4,z=1.55+random()*6.45;
+      const x=originX+(random()*2-1)*10.4,z=originZ+1.55+random()*6.45;
       if(!safe(x,z)||!safe(x+.67,z)||!safe(x-.67,z)||!safe(x,z+.58)) continue;
       first??={x,z};
       const grass=field.type(1,x,z);
@@ -160,7 +161,7 @@ export function buildEcology(world,field,region,nav,crowd) {
     }
     for(const bird of flock){
       const angle=time*.165+bird.a+1.8;
-      const x=Math.cos(angle)*bird.r,z=Math.sin(angle)*bird.r*.79-4.55;
+      const x=originX+Math.cos(angle)*bird.r,z=originZ+Math.sin(angle)*bird.r*.79-4.55;
       const base=field.height(x,z);
       const roof=world.objects.reduce((height,o)=>items[o.type].category==='house'&&inFootprint(x,z,o,1.05)
         ? Math.max(height,architectureHeight(items[o.type].form,o.w)+(o.type==='tower'?3:0)) : height,0);
@@ -176,7 +177,7 @@ export function buildEcology(world,field,region,nav,crowd) {
     }
     for(const [i,o] of clouds.entries()){
       const shift=Math.sin(time*.057+i*.75)*2.2;
-      pose(o.x+shift,o.y+.12*Math.sin(time*.11+i),o.z+.21*Math.sin(time*.08+i),.21,o.s);
+      pose(originX+o.x+shift,o.y+.12*Math.sin(time*.11+i),originZ+o.z+.21*Math.sin(time*.08+i),.21,o.s);
       for(const [j,puff] of puffs.entries()) draw('cloud',
         light==='night'?(j%2?'#777e94':'#98a1b3'):light==='gold'?(j%2?'#edceaf':'#f3e3cb'):(j%2?'#e4eadc':'#f6f6e8'),...puff);
     }
