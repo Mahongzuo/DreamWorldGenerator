@@ -1,3 +1,4 @@
+import {sceneDesigns,appendScene} from './scene-presets.js';
 import './style.css';
 import {icon} from './icons.js';
 import {catalog, items, themes, preset, inside, footprint, clamp, round, loadWorld, worldLink, STORE_KEY, ATLAS_KEY, MAX_OBJECTS, MAX_STROKES, MAX_POINTS, biomeOf, biomes, normalize, tileKey, waterAnimal, wildTile} from './sandbox-state.js';
@@ -134,7 +135,6 @@ try{
     if(open){
       rx=Number.isSafeInteger(config.x)?config.x:0;
       rz=Number.isSafeInteger(config.z)?config.z:0;
-      if(!claimed(rx,rz))rx=rz=0;
       world=readRegion(rx,rz);
     }
   }
@@ -146,15 +146,16 @@ try{
     if(restored){world=restored;open=true;if(!claimed(rx,rz))rx=rz=0;}
   }
 }catch{/* Legacy files are retained as a migration fallback. */}
-function makeContinuous(){
-  if(world.regions)return;
+function continuousSnapshot(){
+  if(world.regions)return world;
   const entries=[[0,0,origin]];
   for(const key of new Set([...savedRegions,...unsavedRegions.keys()])){
     if(key===originKey)continue;
     const [x,z]=key.split(',').map(Number);entries.push([x,z,readRegion(x,z)]);
   }
-  world=joinRegions(entries);before=[];after=[];
+  return joinRegions(entries);
 }
+function makeContinuous(){world=continuousSnapshot();before=[];after=[];}
 if(open){makeContinuous();
   try{localStorage.setItem(TERRITORY_KEY,JSON.stringify(territoryEnvelope(world)));}catch{territorySaved=false;}
 }
@@ -183,10 +184,11 @@ document.querySelector('#app').innerHTML=`
     <h1>林间造境工作台</h1>
     <p>搭建一片栖地，走进去看看。</p></div>
     <div class="preset-select"><label for="theme">${icon('layers',16)} 场景预设</label>
-      <select id="theme" aria-label="场景预设">${Object.entries(themes).map(([k,v])=>`<option value="${k}">${v.label} · ${v.description}</option>`).join('')}</select>
-      <button class="btn" type="button" id="load-theme">载入</button>
+      <select id="theme" aria-label="场景预设"><optgroup label="完整场景 · 在新领地生成">${Object.entries(sceneDesigns).map(([k,v])=>`<option value="scene:${k}">${v.name}</option>`).join('')}</optgroup><optgroup label="基础沙盘 · 替换当前地块">${Object.entries(themes).filter(([k])=>k!=='coast').map(([k,v])=>`<option value="${k}">${v.label} · ${v.description}</option>`).join('')}</optgroup></select>
+      <button class="btn" type="button" id="load-theme">一键生成</button>
     </div>
   </div>
+  <section class="scene-summary" id="scene-summary" aria-label="场景说明"></section>
   <div class="studio">
     <section class="viewer" aria-label="自由建造沙盘">
       <div class="viewbar">
@@ -482,7 +484,7 @@ function syncTerritory(){
   byId('open-territory').hidden=open;
   byId('territory-picker').hidden=!open;
   const select=byId('territory-select');
-  select.replaceChildren(...keys.map(key=>new Option(key===originKey?'起点 (0, 0)':key.replace(',','，'),key)));
+  select.replaceChildren(...keys.map(key=>new Option((world.regions?.[key]?.scene?sceneDesigns[world.regions[key].scene].name+' · ':'')+(key===originKey?'起点 (0, 0)':key.replace(',','，')),key)));
   select.value=current;
   for(const button of document.querySelectorAll('#atlas-controls [data-move]')){
     const [dx,dz]=button.dataset.move.split(',').map(Number);
@@ -494,14 +496,15 @@ function syncTerritory(){
     button.classList.toggle('unclaimed',isNew);
   }
 }
+const plotName=meta=>sceneDesigns[meta.scene]?.name??themes[meta.theme].label;
 function sync(){
   open=Boolean(world.regions);
   if(open&&!world.regions[tileKey(rx,rz)]){rx=rz=0;viewport?.focusRegion(0,0);}
   nextId=Math.max(0,...world.objects.map(o=>o.id),...world.strokes.map(o=>o.id))+1;
-  const biome=biomes[biomeOf(world.regions?.[tileKey(rx,rz)]??world)];
-  byId('plot-title').textContent=open&&(rx||rz)?biome.label:themes[world.theme].label;
-  byId('biome-name').textContent=biome.label;
-  byId('biome-detail').textContent=biome.detail;
+  const meta=world.regions?.[tileKey(rx,rz)]??world,biome=biomes[biomeOf(meta)];
+  byId('plot-title').textContent=plotName(world.regions?.[tileKey(rx,rz)]??world);
+  byId('biome-name').textContent=sceneDesigns[meta.scene]?.name??biome.label;
+  byId('biome-detail').textContent=sceneDesigns[meta.scene]?.ecology??biome.detail;
   byId('atlas-controls').hidden=!open;
   byId('atlas-coord').textContent=`视野 ${rx}, ${rz}`;
   byId('map-mode').setAttribute('aria-pressed',open);
@@ -511,9 +514,9 @@ function sync(){
   byId('motion').textContent=motion?'动态开':'动态关';
   stage.classList.toggle('open-land',open);
   stage.classList.toggle('still',!motion);
-  byId('theme').value=world.theme;
+
   byId('weather-tag').textContent=labels[world.season]+' / '+labels[world.light];
-  byId('seed-tag').textContent='SEED '+world.seed;
+  byId('seed-tag').textContent='SEED '+meta.seed;
   byId('world-count').textContent=`${world.objects.length} 个物件 · ${world.strokes.length} 道笔迹`;
   byId('undo').disabled=before.length===0;
   byId('redo').disabled=after.length===0;
@@ -555,8 +558,8 @@ function travel(dx,dz,follow=false){
   if(!claimed(x,z))return;
   rx=x;rz=z;
   const meta=world.regions[tileKey(rx,rz)],biome=biomes[biomeOf(meta)];
-  byId('biome-name').textContent=biome.label;byId('biome-detail').textContent=biome.detail;
-  byId('plot-title').textContent=themes[meta.theme].label;
+  byId('biome-name').textContent=sceneDesigns[meta.scene]?.name??biome.label;byId('biome-detail').textContent=sceneDesigns[meta.scene]?.ecology??biome.detail;
+  byId('plot-title').textContent=plotName(meta);byId('seed-tag').textContent='SEED '+meta.seed;
   if(!follow){cancelDraft();viewport?.focusRegion(rx,rz);}
   syncTerritory();byId('atlas-coord').textContent=`视野 ${rx}, ${rz}`;
   rememberLocation();
@@ -782,6 +785,7 @@ catch(error){
   byId('snapshot').disabled=true;
 }
 sync();
+viewport?.reset();
 viewport?.motion(motion);
 preloadModelPack(id=>viewport?.refreshModels(id));
 renderCatalog();
@@ -843,11 +847,27 @@ document.querySelector('.environment').addEventListener('click',e=>{
   cancelDraft();
   commit({...world,[b.dataset.world]:b.dataset.value});
 });
+function renderSceneSummary(){
+  const id=byId('theme').value.slice(6),design=byId('theme').value.startsWith('scene:')?sceneDesigns[id]:null;
+  byId('load-theme').textContent=design?'一键生成':'载入沙盘';
+  byId('scene-summary').innerHTML=design?`<div class="scene-miniatures">${design.preview.map(id=>`<img src="${packThumbnail(id)}" alt="${items[id].name}">`).join('')}</div><div><strong>${design.name}<span>${design.objects.length} 个物件 · ${design.strokes.length} 道地形与路径</span></strong><p>${design.description}</p><small>自动接入新领地，保留已有建造。生成后可逐件编辑、继续扩建，也可撤销。</small></div>`:'<div><strong>基础沙盘</strong><p>载入将替换当前地块的物件与笔迹，可撤销。已有其他领地会保留。</p></div>';
+}
+byId('theme').addEventListener('change',renderSceneSummary);
+byId('theme').value='scene:garden';renderSceneSummary();
 byId('load-theme').addEventListener('click',()=>{
   cancelDraft();
   selected=null;
   const name=byId('theme').value;
   if(mode==='walk'||mode==='spawn'){endExploring();mode='build';}
+  if(name.startsWith('scene:')){
+    try{
+      const result=appendScene(continuousSnapshot(),name.slice(6),{x:rx,z:rz});
+      rx=result.x;rz=result.z;mode='build';commit(result.world);
+      viewport?.reset();renderCatalog();
+      announce(`已生成${sceneDesigns[name.slice(6)].name} · 原有建造已保留，可自由编辑和扩建`);
+    }catch(error){announce(error.message);}
+    return;
+  }
   if(world.regions){
     const key=tileKey(rx,rz),local=preset(name),[sx,sz]=[rx*30,rz*22.8];
     const regions={...world.regions};delete regions[key];

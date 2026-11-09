@@ -288,7 +288,7 @@ function landscape(kit,world,field,region,trees,bridges) {
     const angle=rng()*Math.PI*2,r=Math.sqrt(rng())*radius*contour(angle);
     return [Math.cos(angle)*r*LAND.x,Math.sin(angle)*r*LAND.z];
   };
-  for(let i=0;flora && i<190 && treeSites.length<limit;i++){
+  for(let i=0;!world.scene && flora && i<190 && treeSites.length<limit;i++){
     const [x,z]=sample(.96,treeRandom);
     const v=Math.hypot(x/LAND.x,z/LAND.z);
     if((!world.biome && (v<.6 || (z>1.5 && v<.84))) || field.depth(x,z)>.12 || field.type(2,x,z) || clear(x,z,1.1) ||

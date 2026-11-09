@@ -70,7 +70,7 @@ export function buildEcology(world,field,region,nav,crowd) {
   };
   const runners=[];
   const kind=biome==='forest'||biome==='ridge'?'deer':'rabbit';
-  for(let i=0;i<(kind==='deer'?3:4);i++){
+  for(let i=0;i<(world.scene?0:kind==='deer'?3:4);i++){
     const center=findDry(kind==='rabbit');
     if(!center)continue;
     const offset=random()*twoPi;
@@ -90,7 +90,7 @@ export function buildEcology(world,field,region,nav,crowd) {
   }
   const streams=world.strokes.filter(s=>items[s.type].category==='water');
   const ducks=[];
-  for(let i=0;streams.length&&i<4;i++){
+  for(let i=0;!world.scene&&streams.length&&i<4;i++){
     const stream=streams[i%streams.length];
     const [x,z]=stream.p[Math.floor(stream.p.length*(.18+i*.17))];
     const phase=i*1.84+random()*.7;

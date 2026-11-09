@@ -1,0 +1,27 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><title>完整场景验证</title><style>body{font:16px system-ui;background:#eef2e5;padding:20px;color:#29432f}pre{white-space:pre-wrap}</style><h1>完整场景 · 动物落点与可扩建存档</h1><pre id="result">检查中…</pre><script type="module">
+import {createScene,sceneDesigns} from '../src/scene-presets.js';
+import {createKit,disposeGroup} from '../src/model.js';
+import {createContinuousLand} from '../src/continuous-land.js';
+import {joinRegions,appendRegion} from '../src/territory.js';
+import {preset,items,waterAnimal,tileShift} from '../src/sandbox-state.js';
+import {animalProfile} from '../src/animal-behavior.js';
+import {createAnimalCrowd,makeWander,wander} from '../src/navigation.js';
+const lines=[];
+try{
+ for(const id of Object.keys(sceneDesigns)){
+  for(const [rx,rz] of [[0,0],[2,-1]]){
+   const scene=createScene(id),world=rx===0?joinRegions([[0,0,scene]]):joinRegions([[0,0,preset('blank')],[rx,rz,scene]]);
+   const land=createContinuousLand(createKit()).update(world,{x:rx,z:rz},'low'),nav=land.userData.navigation,crowd=createAnimalCrowd();
+   const animals=world.objects.filter(o=>items[o.type].category==='animal');
+   for(const o of animals){
+    const p=animalProfile(o),kind=waterAnimal(o)?'water':'land';
+    if(!nav.valid(o.x,o.z,p.radius,kind))throw Error(id+' '+o.type+' invalid initial habitat at '+o.x+','+o.z);
+    const a=makeWander(nav,o.x,o.z,p.radius,kind,o.id,2,crowd);if(!a)throw Error(id+' unavailable spawn');a.profile=p;
+    for(let i=0;i<150;i++){wander(nav,a,.05,p.speed);if(!nav.valid(a.x,a.z,a.r,kind))throw Error(id+' invalid route');}
+   }
+   lines.push('PASS '+sceneDesigns[id].name+' · '+animals.length+' 只动物的落点与路径（'+rx+','+rz+'）');disposeGroup(land);
+  }
+ }
+ document.querySelector('#result').textContent=lines.join('\n');
+}catch(e){document.querySelector('#result').textContent=lines.join('\n')+'\nFAIL '+e.stack;}
+</script></html>

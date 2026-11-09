@@ -1,0 +1,75 @@
+// Layouts use ordinary editable objects and brush strokes in local plot coordinates.
+// Object tuples: type, x, z, uniform scale, yaw (radians).
+export const sceneDesigns={
+  garden:{name:'江南园林',ecology:'竹丛 · 荷塘 · 绿头鸭 · 大蓝鹭',theme:'ink',seed:'GARDEN-1109',description:'一池荷水，两岸回廊。由月洞门入园，沿石径穿过竹影与茶堂。',
+    preview:['build-huizhou','build-covered-bridge','nature-wisteria'],
+    objects:[
+      ['build-huizhou',-7,-5.7,.85,0],['build-teahall',7,-5.5,.8,0],
+      ['build-covered-bridge',0,.7,.92,0],['build-moon-gate',-7,5.6,.95,0],
+      ['pack-pavilion',7,4.9,.66,0],['build-red-pagoda',10,-.7,.55,0],
+      ['nature-bamboo',-11,-6.5,.78,.2],['nature-bamboo',-11,-2.8,.72,-.2],
+      ['nature-willow',3,-5,.8,0],['nature-willow',3.3,6.2,.75,.5],
+      ['nature-bonsai',-10.5,3.5,.7,.3],['nature-wisteria',-3.9,-5.5,.8,0],
+      ['pack-karst',-3.1,-1.8,.65,.3],['nature-fern',-11,6.2,.7,0],
+      ['lantern',-8.8,7.3,1,0],['lantern',-5.2,7.3,1,0],['lantern',5.1,2.8,1,0],
+      ['rock',3.8,-1.9,1.3,0],['mallard',0,-5,1,0],['mallard',.2,5.5,1,.8],
+      ['heron',3.5,-8.5,.7,.2],['fauna-tortoise',-9,1.5,1,.6]
+    ],
+    strokes:[
+      ['jade',[[0,-11.4],[-.5,-6],[.3,-2],[0,2],[-.4,7],[0,11.4]],3],
+      ['lotus',[[0,-6],[.2,-3]],4.7],['lotus',[[0,5],[0,7]],4.3],
+      ['moss',[[-11,-2],[-9,2],[-10,6]],3.5],['lawn',[[7,3],[10,6]],4.6],
+      ['stonepath',[[-15,.7],[-7,.7],[-3.4,.7],[3.4,.7],[7,.7],[15,.7]],1.15],
+      ['stonepath',[[-7,-3.1],[-7,.7],[-7,5.6],[-7,11.4]],1.2],
+      ['stonepath',[[7,-3],[7,.7],[7,3.6]],1.1],['flowers',[[9.8,8],[6.5,8.5]],2]
+    ]},
+  village:{name:'欧式村庄',ecology:'花圃 · 牧场 · 绵羊 · 山羊',theme:'keep',seed:'VILLAGE-1109',description:'围绕石铺广场的小村落：木骨会馆、尖顶礼堂、花窗农舍与风车牧场。',
+    preview:['build-guildhall','build-chapel','build-thatch'],
+    objects:[
+      ['build-chapel',0,-6.6,.78,0],['build-guildhall',-6.1,-5.5,.78,0],
+      ['build-thatch',6,-5.1,.78,0],['pack-windmill',10.3,3.5,.64,0],
+      ['build-thatch',-7.3,3.7,.65,Math.PI],['pack-greenhouse',6.5,7,.65,0],
+      ['nature-bonsai',-11.3,-6.8,.85,0],['pack-ginkgo',10.9,-5.8,1.3,.3],
+      ['nature-fern',-11,6.7,.7,0],['nature-fern',-3.8,-8,.6,0],
+      ['well',0,-.7,1,0],['lantern',-2,1.2,1,0],['lantern',2,1.2,1,0],
+      ['sheep',-1.8,6.2,.9,0],['sheep',.7,6.5,.9,.8],['goat',3,4.7,.85,0],
+      ['rabbit',-10.5,0,1,.5],['nature-peak',12,-9,.8,0]
+    ],
+    strokes:[
+      ['paving',[[-1,0],[1,0]],5],
+      ['stonepath',[[-15,0],[-7,0],[0,0],[7,0],[15,0]],1.4],
+      ['stonepath',[[0,-4.1],[0,0],[0,3.5],[0,11.4]],1.2],
+      ['dirtpath',[[-6,-3],[-6,0],[-7,1.9]],1.1],['dirtpath',[[6,-2.5],[6,0],[6,5.7]],1.1],
+      ['flowers',[[-10,-2.6],[-7,-2.6],[-4.7,-2.6]],2],
+      ['flowers',[[4,-2.5],[6,-2.5],[8.3,-2.5]],1.7],
+      ['lawn',[[-2.7,5],[-2,7.5],[2.8,7]],5],
+      ['fence',[[-3.5,4],[-3.5,8.8],[3.5,8.8],[3.5,6.8]],.9],
+      ['hill',[[10,-8],[12,-8]],3.8]
+    ]},
+  coast:{name:'热带海岸',ecology:'棕榈 · 沙湾 · 陆龟 · 水豚',theme:'coast',seed:'COAST-1109',description:'棕榈沙湾环抱蓝色海水，陶瓦别墅、海岸灯塔与海蚀岩拱串起滨海步道。',
+    preview:['build-villa','build-lighthouse','nature-palm'],
+    objects:[
+      ['build-villa',-6,-5.3,.8,0],['build-lighthouse',4,-6.3,.72,0],
+      ['build-thatch',-7.5,5.4,.63,0],['nature-sea-arch',9,5.8,.95,.15],
+      ['nature-travertine',-11,-.3,.8,0],['nature-mesa',-11,-8,.65,.2],
+      ['nature-palm',-10.8,-4.4,.9,.3],['nature-palm',-1.7,-6.6,.95,.6],
+      ['nature-palm',2.3,-1.7,.9,-.3],['nature-palm',-3.3,3.8,.85,.8],
+      ['nature-palm',1.9,6.5,1,0],['nature-palm',-11.7,7,.85,-.4],
+      ['nature-fern',-9.7,3.6,.8,0],['nature-fern',-2.3,-8,.7,0],
+      ['fire',-1,7.5,1,0],['rock',3.8,3,1.5,0],
+      ['fauna-tortoise',-5.6,.7,1,.7],['fauna-tortoise',-.7,3.8,.85,0],
+      ['fauna-capybara',-8.5,-.2,.9,0]
+    ],
+    strokes:[
+      ['sand',[[0,-9],[2,-4],[2,1],[3,6],[3,9]],7],
+      ['sand',[[7,-9],[7,-3],[7,3],[7,9]],7],
+      ['sand',[[-9,7],[-5,7],[-1,7]],5],
+      ['pond',[[13.2,-11.4],[13.2,-5],[13.2,1],[13.2,7],[13.2,11.4]],7],
+      ['pond',[[8.5,-1],[8,1.5],[8.5,3.5]],5.5],
+      ['gravel',[[5.5,-9],[5.8,-6]],2.4],
+      ['dirtpath',[[-15,0],[-10,1],[-6,1],[-2,1],[1,0],[3,-3],[4,-4.4]],1.2],
+      ['dirtpath',[[-6,-3],[-6,1],[-6,3.5]],1.1],
+      ['dirtpath',[[-2,1],[-.5,4],[0,7],[0,11.4]],1.1],
+      ['flowers',[[-10,3],[-9,5]],1.8]
+    ]}
+};

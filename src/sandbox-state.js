@@ -1,3 +1,4 @@
+import {sceneDesigns} from './scene-designs.js';
 import {modelDefinitions} from './asset-registry.js';
 import {addedCatalog, originalNotes} from './field-guide.js';
 
@@ -57,6 +58,7 @@ export const themes = {
   ink: {label:'江南水院', description:'白墙黛瓦与荷塘柳岸', colors:['#879b64','#adb582','#63895d','#789558'], sky:'#cddfd1', growth:'willow'},
   keep: {label:'山间古堡', description:'石塔、都铎屋与苔地', colors:['#8c956a','#a9ac78','#6c8a65','#788c66'], sky:'#d1dbd2', growth:'pine'},
   bloom: {label:'暮色花野', description:'花甸与山间池塘', colors:['#a1a35e','#b5a874','#809061','#a59465'], sky:'#e0dbc3', growth:'sakura'},
+  coast: {label:'海岸沙湾', description:'棕榈沙地与碧蓝海水', colors:['#b8b477','#c8bb89','#93a76e','#b8b580'], sky:'#c8e3de', growth:null},
   blank: {label:'空白沙盘', description:'从第一笔开始', colors:['#98a46a','#afb77c','#809a66','#8f9e62'], sky:'#d7e2cf', growth:null}
 };
 
@@ -141,7 +143,7 @@ export function normalize(data, limits={}) {
     ids.add(entry.id);
     return true;
   };
-  return {v:2, theme:data.theme, ...(Object.hasOwn(biomes,data.biome)?{biome:data.biome}:{}), seed:String(data.seed ?? 'FIELD').toUpperCase().replace(/[^A-Z0-9-]/g,'').slice(0,18) || 'FIELD',
+  return {v:2, theme:data.theme, ...(Object.hasOwn(sceneDesigns,data.scene)?{scene:data.scene}:{}), ...(Object.hasOwn(biomes,data.biome)?{biome:data.biome}:{}), seed:String(data.seed ?? 'FIELD').toUpperCase().replace(/[^A-Z0-9-]/g,'').slice(0,18) || 'FIELD',
     felled:Array.isArray(data.felled)?[...new Set(data.felled.filter(k=>Number.isInteger(k)&&k>=0&&k<190))].slice(0,190):[],
     season:['summer','autumn','winter'].includes(data.season) ? data.season : 'summer',
     light:['day','gold','night'].includes(data.light) ? data.light : 'day',
@@ -208,7 +210,7 @@ export const biomes={
   wetland:{label:'河湾湿地',detail:'垂柳 · 芦苇 · 野鸭',theme:'ink',growth:'willow',colors:['#849968','#a7b47b','#658962','#788f5e'],density:24},
   ridge:{label:'石岭林缘',detail:'岩石 · 冷杉 · 林鹿',theme:'keep',growth:'pine',colors:['#939a70','#a6a87c','#78876a','#8b9374'],density:18}
 };
-export const biomeOf=world=>world.biome??({pine:'forest',ink:'wetland',keep:'ridge',bloom:'meadow',blank:'meadow'})[world.theme];
+export const biomeOf=world=>world.biome??({pine:'forest',ink:'wetland',keep:'ridge',bloom:'meadow',blank:'meadow',coast:'meadow'})[world.theme];
 export const tileKey=(x,z)=>x+','+z;
 export const tileShift=(x,z)=>[x*LAND.x*2,z*LAND.z*2];
 export const tileInside=(x,z,margin=0)=>Math.abs(x)<LAND.x-margin&&Math.abs(z)<LAND.z-margin;
