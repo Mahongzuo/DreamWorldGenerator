@@ -127,12 +127,17 @@ export function buildAvatar(kit){
     new T.MeshBasicMaterial({color:'#3e4f3b',transparent:true,opacity:.22,depthWrite:false}));
   shadow.position.y=.022;
   root.add(shadow);
-  function pose(t,moving,swing){
+  const sword=new T.Group(),blade=batch(kit);
+  p(blade,'box','#cbd1bd',0,-.62,.035,.09,.74,.04);
+  p(blade,'box','#98835c',0,-.29,.035,.28,.05,.07);
+  p(blade,'box','#745a3f',0,-.18,.035,.06,.18,.06);
+  blade.finish(sword);sword.position.copy(axe.position);sword.visible=false;arms[1].add(sword);
+  function pose(t,moving,swing,weapon='axe'){
     const wave=Math.sin(t*9.6)*(moving?.53:.03);
     legs[0].rotation.x=wave;legs[1].rotation.x=-wave;
     arms[0].rotation.x=-wave*.65;
     arms[1].rotation.x=swing>0 ? -1.5*Math.sin(swing*Math.PI) : wave*.65;
-    arms[1].rotation.z=swing>0?.23:0;axe.visible=swing>0;
+    arms[1].rotation.z=swing>0?.23:0;axe.visible=swing>0&&weapon!=='sword';sword.visible=swing>0&&weapon==='sword';
   }
   return {group:root,pose};
 }

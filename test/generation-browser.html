@@ -1,0 +1,29 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><title>跨界生成验证</title><style>body{font:16px system-ui;padding:24px;background:#eef3e7;color:#29432f}pre{white-space:pre-wrap}</style><h1>随机生成 · 道路水系连接</h1><pre id="result">运行中…</pre><script type="module">
+import {appendScene} from '../src/scene-presets.js';
+import {createContinuousLand} from '../src/continuous-land.js';
+import {createKit,disposeGroup} from '../src/model.js';
+import {joinRegions} from '../src/territory.js';
+import {preset,items,waterAnimal} from '../src/sandbox-state.js';
+import {animalProfile} from '../src/animal-behavior.js';
+import {createAnimalCrowd,makeWander} from '../src/navigation.js';
+const lines=[],check=(v,s)=>{if(!v)throw Error(s);lines.push('PASS '+s);};
+try{
+ const old=preset('blank');old.strokes=[{id:1,type:'stonepath',w:1.4,p:[[0,2],[15,2]]},{id:2,type:'jade',w:3,p:[[0,-5],[15,-5]]}];
+ const t=performance.now(),world=appendScene(joinRegions([[0,0,old]]),'village',{x:0,z:0},{seed:'MULTI',width:2,height:2,density:1,plants:8}).world;
+ const land=createContinuousLand(createKit()).update(world,{x:1,z:0},'low'),f=land.userData.field;
+ check(f.paint(14.8,2)==='stonepath'&&f.paint(15.2,2)==='stonepath','相邻地块道路连续覆盖边界两侧');
+ check(f.depth(14.8,-5)>.75&&f.depth(15.2,-5)>.75,'既有河道沿相同位置、宽度延续到新领地');
+ check(Math.abs(f.height(14.99,-5)-f.height(15.01,-5))<.03,'河床边界高度连续');
+ check(land.userData.navigation.sweep(14,2,16,2,.25,'land'),'角色可沿连接道路跨界通行');
+ disposeGroup(land);
+ for(const style of ['garden','village','coast']){
+  const w=appendScene(joinRegions([[0,0,preset('blank')]]),style,{x:0,z:0},{seed:'STRESS',width:3,height:3,density:1.5,plants:30});
+  const terrain=createContinuousLand(createKit()).update(w.world,{x:w.x+1,z:w.z+1},'low'),nav=terrain.userData.navigation,crowd=createAnimalCrowd();
+  let spawned=0,total=0;
+  for(const o of w.world.objects.filter(o=>items[o.type].category==='animal')){total++;const profile=animalProfile(o);if(makeWander(nav,o.x,o.z,profile.radius,waterAnimal(o)?'water':'land',o.id,2,crowd))spawned++;}
+  check(spawned===total,style+' 9 块高密度场景动物均能找到安全落点 '+spawned+'/'+total);
+  disposeGroup(terrain);
+ }
+ document.querySelector('#result').textContent=lines.join('\n')+'\n总验证时间 '+Math.round(performance.now()-t)+'ms';
+}catch(e){document.querySelector('#result').textContent=lines.join('\n')+'\nFAIL '+e.stack;}
+</script></html>

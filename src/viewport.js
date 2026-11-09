@@ -1,3 +1,4 @@
+import {createAdventureActors} from './adventure-actors.js';
 import {animalProfile} from './animal-behavior.js';
 import {modelDefinitions,modelHeight,collisionParts} from './asset-registry.js';
 import * as T from 'three';
@@ -20,7 +21,7 @@ const lighting = {
   night:{sky:'#8fbaff',ground:'#627990',ambient:1.17,sun:'#99bcff',power:1.02,exposure:1.10,position:[9,15,-6],glass:1.28}
 };
 
-export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
+export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=()=>{}) {
   const modest=matchMedia('(pointer: coarse)').matches||(navigator.deviceMemory??8)<=4||(navigator.hardwareConcurrency??8)<=4;
   let quality=modest?'low':'balanced';
   const renderer=new T.WebGLRenderer({antialias:true,alpha:true,powerPreference:'high-performance'});
@@ -100,6 +101,9 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
   let crowd=createAnimalCrowd(),playerBody=null;
   const continuousLand=createContinuousLand(kit);
   const objects=new Map();
+  const adventure=createAdventureActors(scene,onGame);let gameStatusClock=0,inputSuspended=false;
+  window.addEventListener('blur',()=>{inputSuspended=true;movement.clear();adventure.pause();});
+  window.addEventListener('focus',()=>{inputSuspended=false;schedule();});
   const raycaster=new T.Raycaster(),ndc=new T.Vector2(),plane=new T.Plane(new T.Vector3(0,1,0),0);
   const hit=new T.Vector3(), localHit=new T.Vector3(), inverse=new T.Matrix4(), localRay=new T.Ray(), box=new T.Box3();
 
@@ -118,7 +122,10 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     if(paused||document.hidden) return;
     const delta=Math.min(.05,(now-(last||now-16))/1000);
     last=now;
-    if(playing)walk(delta);
+    if(playing&&!inputSuspended&&!document.querySelector('dialog[open]')){walk(delta);
+      if(world.game?.health!==0)adventure.step(delta,player);
+      gameStatusClock-=delta;if(gameStatusClock<=0){gameStatusClock=.2;onGame({type:'status',text:adventure.nearby(player)});}
+    }
     else controls.update(delta);
     if(region?.continuous&&!playing){
       const [x,z]=regionAt(controls.target.x,controls.target.z);
@@ -418,6 +425,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
       avatar.group.visible=player.tile===currentTile();
       if(avatar.group.visible)avatar.group.position.y=land.userData.navigation.height(player.x,player.z);
     }
+    if(playing)adventure.sync(next,land.userData.navigation,crowd,player);
     updateAnimalDetail();schedule();
   }
   function cameraMode(on){
@@ -508,6 +516,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     if(!safe)return false;
     player={...safe,tile:currentTile(),a:reuse?player.a:Math.PI,t:0,swing:0,y:nav.height(safe.x,safe.z)};
     yaw=player.a;lift=2.55;playing=true;syncPlayerBody();
+    adventure.sync(world,nav,crowd,player);
     movement.clear();
     controls.enabled=false;
     avatar.group.visible=true;
@@ -522,6 +531,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
   }
   function endWalk(){
     if(!playing)return;
+    adventure.clear();
     playing=false;lookDrag=null;movement.clear();crowd.remove(playerBody);playerBody=null;
     controls.enabled=true;
     stage.classList.remove('walking');
@@ -534,6 +544,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
   }
   function walk(dt){
     if(!player||!land)return;
+    if(world.game?.mode==='adventure'&&world.game.health<=0){movement.clear();return;}
     const forward=Number(movement.has('forward'))-Number(movement.has('back'));
     const side=Number(movement.has('right'))-Number(movement.has('left'));
     const fast=movement.has('run'),speed=(fast?4.25:2.75)*dt;
@@ -565,7 +576,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     player.swing=Math.max(0,player.swing-dt*2.2);
     avatar.group.position.set(player.x,player.y,player.z);
     avatar.group.rotation.y=player.a;
-    avatar.pose(player.t,moved,player.swing);
+    avatar.pose(player.t,moved,player.swing,player.weapon);
     const back=4.10+(lift-2.55)*.34;
     const x=player.x-Math.sin(yaw)*back,z=player.z-Math.cos(yaw)*back;
     let distance=back;
@@ -635,11 +646,38 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
   }
   function chop(){
     const tree=nearest(true);
-    if(!tree||player.swing>.27)return null;
-    player.swing=1;
+    if(!tree||player.swing>.27||(world.game?.mode==='adventure'&&world.game.health<=0))return null;
+    player.swing=1;player.weapon='axe';
     player.a=Math.atan2(tree.x-player.x,tree.z-player.z);
     schedule();
     return tree;
+  }
+
+
+  function strikeTarget(){
+    if(!playing||!player||(world.game?.mode==='adventure'&&world.game.health<=0)||player.swing>.27)return null;
+    const candidates=[];
+    for(const o of world.objects){
+      if(items[o.type].category==='animal')continue;
+      const c=Math.cos(o.a),s=Math.sin(o.a),dx=player.x-o.x,dz=player.z-o.z;
+      const lx=c*dx-s*dz,lz=s*dx+c*dz,xx=T.MathUtils.clamp(lx,-o.w/2,o.w/2),zz=T.MathUtils.clamp(lz,-o.d/2,o.d/2);
+      const x=o.x+c*xx+s*zz,z=o.z-s*xx+c*zz,d=Math.hypot(player.x-x,player.z-z);
+      if(d>2.05)continue;
+      let blocked=false;
+      for(let t=.12;t<.9;t+=.1){const px=player.x+(x-player.x)*t,pz=player.z+(z-player.z)*t;
+       if(world.objects.some(b=>b.id!==o.id&&items[b.type].category==='house'&&collisionParts(b).some(part=>inFootprint(px,pz,part)))){blocked=true;break;}}
+      if(!blocked)candidates.push({...o,d,kind:items[o.type].category==='house'?'house':items[o.type].category==='plant'?'wood':'stone'});
+    }
+    candidates.sort((a,b)=>a.d-b.d);const target=candidates[0];
+    player.swing=1;player.weapon='axe';
+    if(target){player.a=Math.atan2(target.x-player.x,target.z-player.z);schedule();return target;}
+    const x=player.x+Math.sin(yaw)*1.3,z=player.z+Math.cos(yaw)*1.3;
+    if(!land.userData.navigation.valid(x,z,.5,'land'))return null;
+    return {kind:'ground',x,z};
+  }
+  function attack(){
+    if(!playing||!player||world.game?.mode!=='adventure'||world.game.health<=0||player.swing>.27)return null;
+    player.swing=1;player.weapon=world.game.sword?'sword':'axe';const result=adventure.attack(player,world.game.sword?30:15);schedule();return result;
   }
 
   function reset(top=false){
@@ -667,7 +705,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     return new Promise(resolve=>c.toBlob(resolve,'image/png'));
   }
   return {update,cameraMode,reset,snapshot,clearPreview,cursor,showFootprint,showObject,showStroke,
-    beginWalk,endWalk,observe,chop,
+    beginWalk,endWalk,observe,chop,attack,strikeTarget,
     focusRegion(x,z){
       if(!region?.continuous)return;
       const [sx,sz]=tileShift(x,z),dx=sx-controls.target.x,dz=sz-controls.target.z;

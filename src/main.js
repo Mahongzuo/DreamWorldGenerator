@@ -1,4 +1,6 @@
+import {normalizeGame,buildingCost,spend,craft,recipes,costText,rewardDefeat,visit,hurt,respawn,gather,quest} from './gameplay.js';
 import {sceneDesigns,appendScene} from './scene-presets.js';
+import {connectScene} from './scene-connections.js';
 import './style.css';
 import {icon} from './icons.js';
 import {catalog, items, themes, preset, inside, footprint, clamp, round, loadWorld, worldLink, STORE_KEY, ATLAS_KEY, MAX_OBJECTS, MAX_STROKES, MAX_POINTS, biomeOf, biomes, normalize, tileKey, waterAnimal, wildTile} from './sandbox-state.js';
@@ -27,7 +29,7 @@ try{
 }catch{/* Start with an empty field journal. */}
 const walkKeys={w:'forward',arrowup:'forward',s:'back',arrowdown:'back',a:'left',arrowleft:'left',d:'right',arrowright:'right',shift:'run'};
 const toolModes={select:'选择',build:'建造',erase:'橡皮',camera:'漫游',spawn:'放置探访者',walk:'第三人称探索'};
-let strike=null,nearby=null,fieldNoteTimer;
+let strike=null,nearby=null,fieldNoteTimer,mineStrike=null,lastHurt=0;
 function saveJournal(){
   try{localStorage.setItem(JOURNAL_KEY,JSON.stringify(journal));}catch{/* The journal still works in this session. */}
 }
@@ -146,9 +148,10 @@ try{
     if(restored){world=restored;open=true;if(!claimed(rx,rz))rx=rz=0;}
   }
 }catch{/* Legacy files are retained as a migration fallback. */}
+world={...world,game:normalizeGame(world.game)};
 function continuousSnapshot(){
   if(world.regions)return world;
-  const entries=[[0,0,origin]];
+  const entries=[[0,0,{...origin,game:world.game}]];
   for(const key of new Set([...savedRegions,...unsavedRegions.keys()])){
     if(key===originKey)continue;
     const [x,z]=key.split(',').map(Number);entries.push([x,z,readRegion(x,z)]);
@@ -189,6 +192,18 @@ document.querySelector('#app').innerHTML=`
     </div>
   </div>
   <section class="scene-summary" id="scene-summary" aria-label="场景说明"></section>
+  <div class="scene-controls" id="scene-controls">
+    <label>场景宽度 <select id="scene-width" aria-label="场景宽度"><option value="1">30 米 · 1 块</option><option value="2">60 米 · 2 块</option><option value="3">90 米 · 3 块</option></select></label>
+    <label>场景纵深 <select id="scene-height" aria-label="场景纵深"><option value="1">23 米 · 1 块</option><option value="2">46 米 · 2 块</option><option value="3">68 米 · 3 块</option></select></label>
+    <label>建筑密度 <select id="scene-density" aria-label="建筑密度"><option value=".5">疏朗</option><option value="1" selected>适中</option><option value="1.5">紧凑</option></select></label>
+    <label>每块植物目标 <input id="scene-plants" aria-label="每块植物数量" type="number" min="0" max="36" value="12"></label>
+    <label>布局种子 <input id="scene-seed" aria-label="布局种子" maxlength="14" value=""></label><button class="btn" id="scene-reroll" type="button">换个布局</button><label class="seed-lock"><input type="checkbox" id="seed-lock">固定种子</label><small id="last-generation"></small>
+    <small>最多 9 块；植物在可用空地内生成。道路与河流自动连接相邻领地。相同种子和参数可复现布局。</small>
+  </div>
+  <section class="game-panel" aria-label="游戏模式与营地">
+    <div class="game-top"><label>玩法 <select id="game-mode" aria-label="游戏模式"><option value="creative">创造 · 自由建造</option><option value="adventure">冒险 · 采集与战斗</option></select></label><strong id="game-stats"></strong></div>
+    <div id="adventure-tools" hidden><p id="game-quest"></p><button class="btn" id="camp-revive" type="button" hidden>返回营地复活 · 损失 20% 木石</button><div class="craft-row"><button class="btn" id="craft-sword" type="button">石刃剑 · 4 木 / 5 石</button><button class="btn" id="craft-pickaxe" type="button">石镐 · 5 木 / 3 石</button><button class="btn" id="craft-heal" type="button">补给 +40 HP · 3 木 / 1 石</button></div><small>漫步时 J 攻击 · F 伐木 · G 采矿 / 拆除 / 挖土 · R 倒下后复活。冒险行动即时存档，不支持撤销；切换模式保留资源。</small></div>
+  </section>
   <div class="studio">
     <section class="viewer" aria-label="自由建造沙盘">
       <div class="viewbar">
@@ -214,8 +229,8 @@ document.querySelector('#app').innerHTML=`
           <div class="walk-actions">
             <button type="button" class="btn" id="observe">${icon('book',16)} 观察 <kbd>E</kbd></button>
             <button type="button" class="btn" id="chop">${icon('axe',16)} 伐木 <kbd>F</kbd></button>
-            <span class="wood-badge" id="wood-count"></span>
-          </div>
+            <button type="button" class="btn" id="mine">采矿 / 拆除 <kbd>G</kbd></button><button type="button" class="btn" id="attack">攻击 <kbd>J</kbd></button><button type="button" class="btn" id="respawn" hidden>营地复活 <kbd>R</kbd></button><span class="wood-badge" id="wood-count"></span>
+          </div><div class="combat-note" id="combat-note" role="status"></div>
           <div class="dpad" aria-label="角色移动">
             <button type="button" class="walk-n" aria-label="向前走" data-walk="forward">↑</button>
             <button type="button" class="walk-w" aria-label="向左走" data-walk="left">←</button>
@@ -294,7 +309,7 @@ function announce(text){
 const selectedObject=()=>world.objects.find(o=>o.id===selected);
 function toolTip(){
   if(mode==='spawn')return '点击地面放置角色，或从预设步道出发。';
-  if(mode==='walk')return 'WASD 或方向键移动 · 拖动画面转向 · E 观察 · F 伐木 · Esc 返回建造。';
+  if(mode==='walk')return 'WASD / 方向键移动 · 拖动转向 · E 观察 · F 伐木 · G 采矿拆除 · J 攻击 · Esc 返回建造。';
   if(mode!=='build') {
     if(mode==='camera'&&open)return matchMedia('(pointer: coarse)').matches?'拖动前往相邻领地，双指旋转或缩放。':'拖动或右键平移，滚轮缩放；中键拖动旋转。';
     return help[mode];
@@ -338,7 +353,7 @@ function renderCatalog(){
 let hasVisitor=false,observedType=null;
 function showJournalCount(){
   byId('journal-count').textContent=journal.seen.length;
-  byId('wood-count').textContent='木材 '+journal.wood;
+  byId('wood-count').textContent=world.game?.mode==='adventure'?`生命 ${world.game.health} · 木 ${world.game.wood} · 石 ${world.game.stone}`:'木材 '+journal.wood;
 }
 function renderGuide(){
   const type=mode==='walk'?(observedType??nearby?.observe?.type??active):selectedObject()?.type??active;
@@ -364,9 +379,11 @@ function updateNearby(value){
   byId('chop').disabled=!tree;
 }
 function startExploring(x,z){
+  if(world.game.mode==='adventure'&&world.game.health<=0){announce('按 R 回到营地复活');return;}
   if(!viewport?.beginWalk(x,z)){announce('这里无法站立，试试开阔的干地。');return;}
   hasVisitor=true;observedType=null;strike=null;
   mode='walk';
+  if(world.game.mode==='adventure')setGame(visit(world.game,tileKey(rx,rz)));
   showMode();renderInspector();renderGuide();renderCatalog();
   stage.focus({preventScroll:true});
 }
@@ -399,18 +416,85 @@ function chopNow(){
   strike=strike?.tag===tag?{tag,count:strike.count+1}:{tag,count:1};
   if(strike.count<3){announce(`伐木 ${strike.count} / 3 · ${items[target.type].name}`);return;}
   strike=null;
-  const gained=!journal.harvested.includes(tag);
-  if(gained){
-    journal.wood+=2;journal.harvested.push(tag);saveJournal();showJournalCount();
-  }
   record(target.type);
-  if(target.id!==undefined)commit({...world,objects:world.objects.filter(o=>o.id!==target.id)});
+  let next;
+  if(target.id!==undefined)next={...world,objects:world.objects.filter(o=>o.id!==target.id)};
   else if(world.regions){
     const key=target.region??regionAt(target.x,target.z).join(','),meta=world.regions[key];
-    commit({...world,regions:{...world.regions,[key]:{...meta,felled:[...new Set([...(meta.felled??[]),target.key])]}}});
-  }else commit({...world,felled:[...new Set([...(world.felled??[]),target.key])]});
-  announce(gained?'已伐下树木 · 收集到木料':'已伐下树木');
+    next={...world,regions:{...world.regions,[key]:{...meta,felled:[...new Set([...(meta.felled??[]),target.key])]}}};
+  }else next={...world,felled:[...new Set([...(world.felled??[]),target.key])]};
+  if(world.game.mode==='adventure'){next.game=gather(world.game,'wood');commit(next);announce('伐木完成 · 木材 +3');}
+  else{
+    const gained=!journal.harvested.includes(tag);
+    if(gained){journal.wood+=2;journal.harvested.push(tag);saveJournal();}
+    commit(next);announce('已伐下树木');
+  }
 }
+function newSceneSeed(){return 'LAND-'+crypto.getRandomValues(new Uint32Array(1))[0].toString(36).toUpperCase();}
+function sceneSettings(){return {width:+byId('scene-width').value,height:+byId('scene-height').value,density:+byId('scene-density').value,plants:+byId('scene-plants').value,seed:byId('scene-seed').value||newSceneSeed()};}
+function renderGame(){
+ const g=world.game;if(!g)return;
+ byId('game-mode').value=g.mode;byId('adventure-tools').hidden=g.mode!=='adventure';
+ byId('game-stats').textContent=g.mode==='adventure'?`♥ ${g.health}/100　木材 ${g.wood}　石料 ${g.stone}　晶石 ${g.crystal}`:'无限材料 · 自由造境，随时切换冒险';
+ byId('game-quest').textContent=quest(g);
+ byId('attack').hidden=g.mode!=='adventure';byId('respawn').hidden=g.mode!=='adventure'||g.health>0;
+ byId('camp-revive').hidden=g.mode!=='adventure'||g.health>0;
+ byId('craft-sword').disabled=!!g.sword;byId('craft-pickaxe').disabled=!!g.pickaxe;
+ byId('craft-sword').textContent=g.sword?'石刃剑已装备':'石刃剑 · 4 木 / 5 石';
+ byId('craft-pickaxe').textContent=g.pickaxe?'石镐已装备':'石镐 · 5 木 / 3 石';
+ if(g.mode==='adventure'&&g.health<=0)byId('combat-note').textContent='已倒下 · 按 R 返回起点营地（损失 20% 木材和石料）';
+ if(g.mode!=='adventure')byId('combat-note').textContent='';
+ showJournalCount();
+}
+function setGame(game){
+ if(game===world.game)return;
+ world={...world,game:normalizeGame(game)};before=[];after=[];save();
+ viewport?.update(world,open?{x:rx,z:rz,claimed,continuous:true}:null);
+ byId('undo').disabled=byId('redo').disabled=true;renderGame();
+}
+function payFor(o){
+ if(world.game.mode!=='adventure')return world.game;
+ if(world.game.health<=0){announce('先返回营地复活');return null;}
+ const cost=buildingCost(items[o.type],o),paid=spend(world.game,cost);
+ if(!paid){announce('材料不足，需要 '+costText(cost));return null;}
+ return {...paid,built:paid.built+(items[o.type].brush?0:1)};
+}
+function gameEvent(event){
+ if(event.type==='status'){if(world.game.mode==='adventure'&&world.game.health>0)byId('combat-note').textContent=event.text;return;}
+ if(world.game.mode!=='adventure')return;
+ if(event.type==='defeat'){
+  setGame(rewardDefeat(world.game,event.id));announce('击败荒晶守卫 · 晶石 +2 · 石料 +2');
+ }else if(event.type==='hurt'){
+  const now=performance.now();if(now-lastHurt<1000||world.game.health<=0)return;lastHurt=now;
+  setGame(hurt(world.game,event.damage));stage.classList.add('was-hit');setTimeout(()=>stage.classList.remove('was-hit'),350);
+ }
+}
+function attackNow(){
+ if(mode!=='walk'||world.game.mode!=='adventure')return;
+ const result=viewport.attack();if(result?.hp>0)announce(`击中守卫 · 剩余生命 ${result.hp}/60`);
+}
+function mineNow(){
+ if(mode!=='walk')return;const target=viewport.strikeTarget();if(!target)return;
+ const tag=target.id??`ground:${round(target.x)}:${round(target.z)}`;
+ if(target.kind==='ground'&&world.strokes.some(s=>s.type==='basin'&&strokeDistance(target,s)<1.5)){announce('这里已经挖过，换一处地面');return;}
+ mineStrike=mineStrike?.tag===tag?{tag,count:mineStrike.count+1}:{tag,count:1};
+ const hits=world.game.mode==='creative'?1:target.kind==='house'?6:world.game.pickaxe?2:4;
+ if(mineStrike.count<hits){announce(`${target.kind==='ground'?'挖土':items[target.type].name} ${mineStrike.count}/${hits}`);return;}
+ mineStrike=null;let next;
+ if(target.kind==='ground'){
+  if(world.strokes.length>=MAX_STROKES*(Object.keys(world.regions??{}).length||1)){announce('当前领地笔迹已满');return;}
+  next={...world,strokes:[...world.strokes,{id:nextId,type:'basin',w:2.1,p:[[round(target.x),round(target.z)]]}]};
+ }else next={...world,objects:world.objects.filter(o=>o.id!==target.id)};
+ if(world.game.mode==='adventure')next.game=gather(world.game,target.kind==='wood'?'wood':'stone');
+ selected=null;commit(next);announce(target.kind==='ground'?'挖出一处浅坑 · 已保存':world.game.mode==='adventure'?'拆除完成 · 已回收材料':'已拆除物件');
+}
+function respawnNow(){
+ if(world.game.mode!=='adventure'||world.game.health>0)return;
+ endExploring();mode='build';if(open)travel(-rx,-rz);
+ setGame(respawn(world.game));lastHurt=performance.now()+1500;
+ startExploring(.1,5.45);announce('已返回营地 · 保留装备与晶石');
+}
+
 function objectRange(key,value,min,max,title,unit){
   return `<label class="range"><span>${title}</span><input type="range" data-size="${key}" min="${min}" max="${max}" step=".1" value="${value}"><output>${Number(value).toFixed(1)} ${unit}</output></label>`;
 }
@@ -434,7 +518,7 @@ function renderInspector(){
     inspector.innerHTML=`<div class="inspector-head"><strong>${items[active].name}</strong><span>拖动绘制</span></div>${objectRange('brush',width,.55,7,'笔宽','m')}`;
     return;
   }
-  inspector.innerHTML=`<div class="inspector-head"><strong>${mode==='build' ? items[active].name : toolLabels[mode]}</strong><span>${mode==='build' ? '已装备' : '当前工具'}</span></div><p>${toolTip()}</p>`;
+  inspector.innerHTML=`<div class="inspector-head"><strong>${mode==='build' ? items[active].name : toolLabels[mode]}</strong><span>${mode==='build' ? '已装备' : '当前工具'}</span></div><p>${toolTip()}</p>${world.game.mode==='adventure'&&mode==='build'?`<p class="build-cost">建造需要：${costText(buildingCost(items[active]))}</p>`:''}`;
 }
 function writeRegion(key,data){
   unsavedRegions.set(key,data);
@@ -518,16 +602,18 @@ function sync(){
   byId('weather-tag').textContent=labels[world.season]+' / '+labels[world.light];
   byId('seed-tag').textContent='SEED '+meta.seed;
   byId('world-count').textContent=`${world.objects.length} 个物件 · ${world.strokes.length} 道笔迹`;
-  byId('undo').disabled=before.length===0;
-  byId('redo').disabled=after.length===0;
+  byId('undo').disabled=world.game.mode==='adventure'||before.length===0;
+  byId('redo').disabled=world.game.mode==='adventure'||after.length===0;
   for(const b of document.querySelectorAll('[data-world]')) b.setAttribute('aria-pressed',world[b.dataset.world]===b.dataset.value);
   viewport?.update(world,open?{x:rx,z:rz,claimed,continuous:true}:null);
   showMode();
   renderInspector();
   renderGuide();
-  showJournalCount();
+  showJournalCount();renderGame();
 }
 function commit(next){
+  next={...next,game:normalizeGame(next.game??world.game)};
+  if(world.game.mode==='adventure'){before=[];after=[];world=next;save();sync();return;}
   before.push(world);
   if(before.length>42) before.shift();
   after=[];
@@ -542,6 +628,7 @@ function cancelDraft(){
   viewport?.showFootprint(mode==='select'?selectedObject():null,true,true);
 }
 function history(redo=false){
+  if(world.game.mode==='adventure'){announce('冒险行动即时存档，无法撤销');return;}
   const stack=redo?after:before;
   if(!stack.length) return;
   cancelDraft();
@@ -563,13 +650,14 @@ function travel(dx,dz,follow=false){
   if(!follow){cancelDraft();viewport?.focusRegion(rx,rz);}
   syncTerritory();byId('atlas-coord').textContent=`视野 ${rx}, ${rz}`;
   rememberLocation();
+  if(mode==='walk'&&world.game.mode==='adventure')setGame(visit(world.game,tileKey(rx,rz)));
 }
 function openNeighbor(button){
   const [dx,dz]=button.dataset.move.split(',').map(Number),x=rx+dx,z=rz+dz;
   if(!Number.isSafeInteger(x)||!Number.isSafeInteger(z))return;
   if(!claimed(x,z)){
     const next=wildTile('LINQI-ATLAS',x,z);
-    commit(appendRegion(world,next,x,z));
+    commit(appendRegion(world,connectScene(world,next,x,z),x,z));
     announce(territorySaved?'已连通新领地，可直接跨边界建造':'已扩建，存储已满，请导出领地备份');
   }
   switchMode('build');travel(dx,dz);
@@ -626,9 +714,16 @@ function updateObject(next){
     viewport.showFootprint(selectedObject(),true,true);
     return;
   }
-  commit({...world,objects:world.objects.map(o=>o.id===next.id?next:o)});
+  let game=world.game;
+  if(game.mode==='adventure'){
+    const old=world.objects.find(o=>o.id===next.id),was=buildingCost(items[next.type],old),now=buildingCost(items[next.type],next);
+    const delta=Object.fromEntries(Object.entries(now).map(([k,v])=>[k,Math.max(0,v-(was[k]??0))]));game=spend(game,delta);
+    if(!game){announce('扩建材料不足，需要 '+costText(delta));return;}
+  }
+  commit({...world,game,objects:world.objects.map(o=>o.id===next.id?next:o)});
 }
 function removeObject(id){
+  if(world.game.mode==='adventure'){announce('在漫步模式靠近物件按 G 拆除并回收材料');return;}
   if(!world.objects.some(o=>o.id===id)) return;
   selected=null;
   commit({...world,objects:world.objects.filter(o=>o.id!==id)});
@@ -645,6 +740,7 @@ function strokeDistance(p,stroke){
   return nearest;
 }
 function erase(point){
+  if(world.game.mode==='adventure'){announce('冒险模式请靠近后用 F / G 采集和拆除');return;}
   if(point.id!==null){removeObject(point.id);return;}
   const stroke=[...world.strokes].reverse().find(s=>strokeDistance(point,s)<=Math.max(.45,s.w*.5+.2));
   if(!stroke){announce('点选想移除的物件或笔迹');return;}
@@ -732,8 +828,9 @@ function up(p){
   if(current.kind==='brush'){
     addBrushPoint(p);
     cancelDraft();
+    const game=payFor(current.stroke);if(!game)return;
     record(current.stroke.type);
-    commit({...world,strokes:[...world.strokes,current.stroke]});
+    commit({...world,game,strokes:[...world.strokes,current.stroke]});
     return;
   }
   const o=p&&(current.kind!=='move'||Math.hypot(p.x-current.start.x,p.z-current.start.z)>.13)?dragShape(p):current.object;
@@ -741,7 +838,8 @@ function up(p){
   if(current.kind==='create'){
     if(!validObject(o)){announce(waterAnimal(o)||items[o.type].form==='lily'?'请选一处足够深且宽敞的水面。':items[o.type].category==='animal'?'请选择开阔的地面，并给附近动物留出距离。':'请换一处开阔、合适的地面。');return;}
     if(items[o.type].category!=='animal')record(o.type);
-    commit({...world,objects:[...world.objects,o]});
+    const game=payFor(o);if(!game)return;
+    commit({...world,game,objects:[...world.objects,o]});
     announce(items[o.type].name+'已建好');
   } else if(JSON.stringify(o)!==JSON.stringify(current.object)) updateObject(o);
 }
@@ -778,7 +876,7 @@ function onInput(kind,p){
   }
 }
 
-try{viewport=createViewport(stage,text=>{byId('metrics').textContent=text;},onInput,travel,updateNearby);}
+try{viewport=createViewport(stage,text=>{byId('metrics').textContent=text;},onInput,travel,updateNearby,gameEvent);}
 catch(error){
   console.error(error);
   stage.insertAdjacentHTML('afterbegin','<div class="render-error">当前浏览器无法启动 WebGL 2。<br>请使用启用硬件加速的浏览器打开沙盘。</div>');
@@ -850,10 +948,12 @@ document.querySelector('.environment').addEventListener('click',e=>{
 function renderSceneSummary(){
   const id=byId('theme').value.slice(6),design=byId('theme').value.startsWith('scene:')?sceneDesigns[id]:null;
   byId('load-theme').textContent=design?'一键生成':'载入沙盘';
-  byId('scene-summary').innerHTML=design?`<div class="scene-miniatures">${design.preview.map(id=>`<img src="${packThumbnail(id)}" alt="${items[id].name}">`).join('')}</div><div><strong>${design.name}<span>${design.objects.length} 个物件 · ${design.strokes.length} 道地形与路径</span></strong><p>${design.description}</p><small>自动接入新领地，保留已有建造。生成后可逐件编辑、继续扩建，也可撤销。</small></div>`:'<div><strong>基础沙盘</strong><p>载入将替换当前地块的物件与笔迹，可撤销。已有其他领地会保留。</p></div>';
+  byId('scene-controls').hidden=!design;
+  byId('scene-summary').innerHTML=design?`<div class="scene-miniatures">${design.preview.map(id=>`<img src="${packThumbnail(id)}" alt="${items[id].name}">`).join('')}</div><div><strong>${design.name}<span>随机布局 · 可调范围、密度与植物</span></strong><p>${design.description}</p><small>自动接入新领地，保留已有建造。生成后可逐件编辑、继续扩建，也可撤销。</small></div>`:'<div><strong>基础沙盘</strong><p>载入将替换当前地块的物件与笔迹，可撤销。已有其他领地会保留。</p></div>';
 }
 byId('theme').addEventListener('change',renderSceneSummary);
-byId('theme').value='scene:garden';renderSceneSummary();
+byId('theme').value='scene:garden';byId('scene-seed').value=newSceneSeed();renderSceneSummary();
+byId('scene-reroll').addEventListener('click',()=>{byId('scene-seed').value=newSceneSeed();announce('已更换布局种子，点击一键生成');});
 byId('load-theme').addEventListener('click',()=>{
   cancelDraft();
   selected=null;
@@ -861,10 +961,13 @@ byId('load-theme').addEventListener('click',()=>{
   if(mode==='walk'||mode==='spawn'){endExploring();mode='build';}
   if(name.startsWith('scene:')){
     try{
-      const result=appendScene(continuousSnapshot(),name.slice(6),{x:rx,z:rz});
+      const settings=sceneSettings(),oldCount=world.objects.length;
+      const result=appendScene(continuousSnapshot(),name.slice(6),{x:rx,z:rz},settings);
       rx=result.x;rz=result.z;mode='build';commit(result.world);
       viewport?.reset();renderCatalog();
-      announce(`已生成${sceneDesigns[name.slice(6)].name} · 原有建造已保留，可自由编辑和扩建`);
+      announce(`已生成${sceneDesigns[name.slice(6)].name} · 道路水系已衔接，原有建造已保留`);
+      byId('last-generation').textContent=`上次生成：${settings.seed} · ${settings.width} × ${settings.height} 块 · ${result.world.objects.length-oldCount} 个实际物件`;
+      if(!byId('seed-lock').checked)byId('scene-seed').value=newSceneSeed();
     }catch(error){announce(error.message);}
     return;
   }
@@ -897,6 +1000,14 @@ byId('relocate').addEventListener('click',()=>switchMode('spawn'));
 byId('quick-spawn').addEventListener('click',()=>startExploring());
 byId('observe').addEventListener('click',observeNow);
 byId('chop').addEventListener('click',chopNow);
+byId('mine').addEventListener('click',mineNow);
+byId('attack').addEventListener('click',attackNow);
+byId('respawn').addEventListener('click',respawnNow);
+byId('camp-revive').addEventListener('click',respawnNow);
+byId('game-mode').addEventListener('change',e=>{cancelDraft();mineStrike=strike=null;setGame({...world.game,mode:e.target.value});renderInspector();announce(e.target.value==='adventure'?'冒险开始 · 放置探访者去采集与探索':'已切换创造模式 · 自由建造');});
+for(const id of Object.keys(recipes))byId('craft-'+id).addEventListener('click',()=>{
+ const next=craft(world.game,id);if(!next){announce('材料不足，或已经装备 / 生命已满');return;}setGame(next);announce('已制作 '+recipes[id].name);
+});
 for(const key of document.querySelectorAll('[data-walk]')){
   key.addEventListener('pointerdown',e=>{
     e.preventDefault();
@@ -953,6 +1064,9 @@ document.addEventListener('keydown',e=>{
     if(walkKeys[key]){e.preventDefault();viewport?.move(walkKeys[key],true);return;}
     if(key==='e'&&!e.repeat){observeNow();return;}
     if(key==='f'&&!e.repeat){chopNow();return;}
+    if(key==='g'&&!e.repeat){mineNow();return;}
+    if(key==='j'&&!e.repeat){attackNow();return;}
+    if(key==='r'&&!e.repeat){respawnNow();return;}
   }
   if((e.metaKey||e.ctrlKey)&&['z','y'].includes(key)){e.preventDefault();history(e.shiftKey||key==='y');return;}
   if(e.metaKey||e.ctrlKey||e.altKey)return;

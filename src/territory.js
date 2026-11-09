@@ -1,4 +1,4 @@
-import {LAND, tileKey, tileShift, normalize, MAX_OBJECTS, MAX_STROKES} from './sandbox-state.js';
+import {LAND, round, tileKey, tileShift, normalize, MAX_OBJECTS, MAX_STROKES} from './sandbox-state.js';
 
 export const TERRITORY_KEY='linqi-continuous-v1';
 export const regionAt=(x,z)=>[Math.floor((x+LAND.x)/(LAND.x*2)),Math.floor((z+LAND.z)/(LAND.z*2))];
@@ -12,10 +12,10 @@ export function appendRegion(world,local,x,z){
   if(world.regions[key])return world;
   const [sx,sz]=tileShift(x,z);
   let id=Math.max(0,...world.objects.map(o=>o.id),...world.strokes.map(s=>s.id))+1;
-  const {objects,strokes,...meta}=local;
+  const {objects,strokes,game,...meta}=local;
   return {...world,regions:{...world.regions,[key]:meta},
-    objects:[...world.objects,...objects.map(o=>({...o,id:id++,x:o.x+sx,z:o.z+sz}))],
-    strokes:[...world.strokes,...strokes.map(s=>({...s,id:id++,p:s.p.map(([px,pz])=>[px+sx,pz+sz])}))]};
+    objects:[...world.objects,...objects.map(o=>({...o,id:id++,x:round(o.x+sx),z:round(o.z+sz)}))],
+    strokes:[...world.strokes,...strokes.map(s=>({...s,id:id++,p:s.p.map(([px,pz])=>[round(px+sx),round(pz+sz)])}))]};
 }
 export function joinRegions(entries){
   let world={...entries[0][2],regions:{},objects:[],strokes:[]};
@@ -30,7 +30,7 @@ export function normalizeTerritory(data){
     if(coords.length!==2||!coords.every(n=>Number.isSafeInteger(n)&&Math.abs(n)<=100000)||tileKey(...coords)!==key)return null;
     const meta=normalize({...value,objects:[],strokes:[]});
     if(!meta)return null;
-    const {objects,strokes,...rest}=meta;regions[key]=rest;
+    const {objects,strokes,game,...rest}=meta;regions[key]=rest;
   }
   const count=Object.keys(regions).length;
   if(!count||!regions['0,0'])return null;
