@@ -1,7 +1,39 @@
 import './style.css';
 import {icon} from './icons.js';
-import {catalog, items, themes, preset, inside, footprint, clamp, round, loadWorld, worldLink, STORE_KEY, ATLAS_KEY, MAX_OBJECTS, MAX_STROKES, MAX_POINTS, biomeOf, biomes, normalize, tileInside, tileKey, wildTile} from './sandbox-state.js';
+import {catalog, items, themes, preset, inside, footprint, clamp, round, loadWorld, worldLink, STORE_KEY, ATLAS_KEY, MAX_OBJECTS, MAX_STROKES, MAX_POINTS, biomeOf, biomes, normalize, tileInside, tileKey, waterAnimal, wildTile} from './sandbox-state.js';
 import {createViewport} from './viewport.js';
+import {guideSources} from './field-guide.js';
+
+const views={
+  house:{name:'建筑',icon:'cabin',types:['house']},
+  plant:{name:'植物',icon:'tree',types:['plant']},
+  animal:{name:'动物',icon:'animal',types:['animal']},
+  terrain:{name:'地形',icon:'terrain',types:['terrain','water','grass']},
+  decor:{name:'景观',icon:'layers',types:['decor']}
+};
+const total=Object.keys(items).length;
+const JOURNAL_KEY='linqi-field-journal-v1';
+let journal={seen:[],wood:0,harvested:[]};
+try{
+  const saved=JSON.parse(localStorage.getItem(JOURNAL_KEY));
+  if(saved){
+    journal={seen:Array.isArray(saved.seen)?[...new Set(saved.seen.filter(id=>Object.hasOwn(items,id)))]:[],
+      wood:Number.isSafeInteger(saved.wood)&&saved.wood>=0?saved.wood:0,
+      harvested:Array.isArray(saved.harvested)?saved.harvested.filter(tag=>typeof tag==='string').slice(-1500):[]};
+  }
+}catch{/* Start with an empty field journal. */}
+const walkKeys={w:'forward',arrowup:'forward',s:'back',arrowdown:'back',a:'left',arrowleft:'left',d:'right',arrowright:'right',shift:'run'};
+const toolModes={select:'选择',build:'建造',erase:'橡皮',camera:'漫游',spawn:'放置探访者',walk:'第三人称探索'};
+let strike=null,nearby=null,fieldNoteTimer;
+function saveJournal(){
+  try{localStorage.setItem(JOURNAL_KEY,JSON.stringify(journal));}catch{/* The journal still works in this session. */}
+}
+function record(id){
+  if(!Object.hasOwn(items,id)||journal.seen.includes(id))return false;
+  journal.seen.push(id);saveJournal();showJournalCount();
+  return true;
+}
+
 
 const labels={summer:'常青',autumn:'秋林',winter:'初雪',day:'白昼',gold:'金暮',night:'月夜'};
 const toolLabels={select:'选择',build:'建造',erase:'橡皮',camera:'漫游'};
@@ -13,9 +45,26 @@ const help={
 const svg=(inside,view='0 0 100 48')=>`<svg viewBox="${view}" aria-hidden="true">${inside}</svg>`;
 function thumbnail(o){
   const ground='<ellipse cx="50" cy="38" rx="35" ry="7" fill="#829465" opacity=".22"/>';
-  const {color:c,accent:a}=o;
+  const {color:c,accent:a,form}=o;
+  if(o.category==='animal'){
+    if(['fish','duck','goose','swan','heron'].includes(form))return svg(ground+`<path fill="${c}" d="M26 31q6-9 24-8 10 1 14 6l9-5-1 12-10-4q-17 10-36-1Z"/><path fill="${a}" d="M50 24q5-4 8-12 5-5 11 1l-5 3-4 12Z"/><circle cx="63" cy="13" r="1" fill="#3d4c40"/>`);
+    if(['owl','swallow','kingfisher','butterfly','bee','dragonfly'].includes(form))return svg(ground+`<path fill="${c}" d="M50 22Q34 8 22 11q1 14 24 21l4 5 4-5q23-7 24-21-12-3-28 11Z"/><path fill="${a}" d="M27 15q6-2 18 10-10 0-18-10Zm46 0q-6-2-18 10 10 0 18-10Z"/>`);
+    const long=['deer','elk','goat','horse'].includes(form), rabbit=form==='rabbit';
+    return svg(ground+`<path fill="${c}" d="M29 27q5-8 22-5l9-1 3-7 8 3 3 5-6 6-7 1-3 10h-4l1-9-14 2-3 7h-4l1-9-7 2Z"/><path fill="${a}" d="${long?'M65 15l-2-9 3-4 1 3-2 3 2 6 3-7 3-1-2 4-1 6Z':rabbit?'M63 17l-4-12 3-2 4 11 2-11 3 2-1 12Z':'M31 26l-9-7-3 3 7 8Z'}"/><circle cx="68" cy="20" r="1.2" fill="#38463d"/>`);
+  }
+  if(o.category==='plant'&&!['pine','sakura','willow'].includes(o.id)){
+    if(['conifer','spire','column','umbrella','broad','birch','palm'].includes(form)){
+      const shape=['conifer','spire'].includes(form)?'m49 5 10 13h-5l10 13H35l10-13h-6Z':form==='column'?'M50 4q9 2 11 15t-3 14H42q-8-5-2-21 4-9 10-8Z':'M32 24q-9-8 2-13 4-7 14-6 8-1 14 7 12 1 9 11-6 7-19 6-11 6-20-5Z';
+      return svg(ground+`<path stroke="#886a4d" stroke-width="4" d="M49 21v17"/><path fill="${c}" d="${shape}"/><path fill="${a}" opacity=".74" d="M45 11q8-6 14 5-8 6-14-5Z"/>`);
+    }
+    return svg(ground+`<path stroke="${c}" stroke-width="2.3" fill="none" d="M50 38V15m0 20-12-9m12 6 11-12m-19 16-9-16m26 17 7-10"/><path fill="${c}" d="M37 34q-9-3-9-8 8 0 15 7Zm16-2q5-9 13-9-2 8-13 9Z"/><g fill="${a}"><circle cx="50" cy="13" r="5"/><circle cx="34" cy="21" r="4"/><circle cx="62" cy="18" r="5"/><circle cx="69" cy="25" r="3"/></g>`);
+  }
+  if(o.category==='terrain')return svg(ground+`<path fill="${c}" d="m20 34 15-13 9 3 14-15 17 9 7 14-22 8-19 1Z"/><path fill="${a}" d="m35 21 9 3 14-15 17 9-17-1-8 13Z"/><path fill="none" stroke="#f2efce" stroke-opacity=".45" d="m31 30 15 5 29-9m-39 0 12 4 24-8"/>`);
   if(o.category==='house'){
-    const pavilion=o.id==='pavilion', east=pavilion||o.id==='jiangnan', tower=o.id==='tower', alpine=o.id==='alpine', shed=o.id==='shed';
+    const pavilion=['pavilion','hall','hex','gate'].includes(form), east=pavilion||['jiangnan','court','stilt','pagoda'].includes(form), tower=['tower','fort','bell','lookout','chapel'].includes(form), alpine=form==='alpine', shed=['shed','saw','flat','adobe'].includes(form);
+    if(form==='bridge'||form==='moon'||form==='arch')return svg(ground+`<path fill="${c}" fill-rule="evenodd" d="M20 38V26l28-12 32 12v12H65a15 15 0 0 0-30 0Zm23-2a7 7 0 1 1 14 0Z"/><path fill="${a}" d="m20 25 28-12 32 12v4L48 18 20 29Z"/>`);
+    if(form==='pagoda')return svg(ground+`<path fill="${c}" d="M32 28h35v10H32zm8-11h20v13H40zm5-9h11v15H45z"/><path fill="${a}" d="m23 28 27-9 26 9-7 3H30Zm9-11 18-9 18 9-6 2H38Zm8-8 10-7 10 7-4 2H44Z"/>`);
+    if(form==='mill'||form==='watermill')return svg(ground+`<path fill="${c}" d="m35 16 19-8 12 9 1 19-13 5-19-5Z"/><path fill="${a}" d="m31 17 23-12 17 12-5 3-12-11-19 11Z"/><path stroke="#957657" stroke-width="4" d="m37 16 24 20m-23 1 22-22"/><circle cx="49" cy="26" r="3.4" fill="#e2c193"/>`);
     if(tower) return svg(ground+`<path fill="${c}" d="M41 15h21v22l-10 4-11-4Z"/><path fill="#7f8376" d="m52 18 10-3v22l-10 4Z"/><path fill="${a}" d="M38 16 52 3l13 13-13 4Z"/><path fill="#f0d49c" d="M48 24h4v6h-4z"/>`);
     const roof=east ? 'M21 21q7 0 14-11l16-2 26 13-19 4Z' : alpine ? 'M26 36 49 6l27 13-10 22Z' : shed ? 'M24 20 66 9l13 11-42 11Z' : 'M24 25 47 8l30 11-14 15Z';
     return svg(ground+`<path fill="${c}" d="m30 23 22 3 17-8v17l-16 7-23-6Z" opacity="${pavilion?.24:1}"/><path fill="${c}" d="M33 24h4v13h-4zm17 0h4v17h-4zm14-4h4v16h-4z"/>
@@ -38,7 +87,7 @@ const button=(id,symbol,text,key='')=>`<button type="button" class="btn tool-btn
 const toolbarIcon=(id,symbol,text)=>`<button type="button" class="btn icon-btn" id="${id}" title="${text}" aria-label="${text}">${icon(symbol,17)}</button>`;
 
 let linked=Boolean(location.search), origin=loadWorld(), world=origin;
-let mode='build',category='house',active='cedar',selected=null,draft=null,width=items[active].width;
+let mode='build',category='house',active='cedar',selected=null,draft=null,width=items[active].width,filter='';
 let viewport,toastTimer,before=[],after=[],nextId=1,pending=null,frame=0;
 let open=false,rx=0,rz=0,motion=!matchMedia('(prefers-reduced-motion: reduce)').matches;
 const atlas=new Map(),edits=new Map();
@@ -78,6 +127,7 @@ document.querySelector('#app').innerHTML=`
   <div class="brand"><img src="/mark.svg" alt=""><div><b>林栖</b><small>LINQI / SANDBOX</small></div></div>
   <div class="top-actions">
     <span class="save-state" id="save-state"><span class="dot"></span><span id="save-label">本地存档</span></span>
+    <button type="button" class="btn" id="journal-open" aria-label="打开观察笔记">${icon('book',16)} <span class="journal-label">观察笔记</span><strong id="journal-count">0</strong></button>
     <button type="button" class="btn map-btn" id="map-mode" aria-pressed="false">${icon('map',16)}<span id="map-label">拓展地图</span></button>
     <button type="button" class="btn" id="share" aria-label="复制设计链接" title="复制设计链接">${icon('link',16)}<span class="share-text">分享</span></button>
     <button type="button" class="btn primary" id="snapshot">${icon('camera',16)}拍照</button>
@@ -85,9 +135,9 @@ document.querySelector('#app').innerHTML=`
 </div></header>
 <main class="workspace">
   <div class="intro">
-    <div><div class="eyebrow">${icon('pine',15)} THE SANDBOX / 自由建造</div>
-    <h1>造一座自己的林间小世界。</h1>
-    <p>在沙盘上拖出房屋，画一条溪流，再沿水边种满花草。</p></div>
+    <div><div class="eyebrow">${icon('pine',15)} LINQI FIELD STUDIO</div>
+    <h1>林间造境工作台</h1>
+    <p>搭建一片栖地，走进去看看。</p></div>
     <div class="preset-select"><label for="theme">${icon('layers',16)} 场景预设</label>
       <select id="theme" aria-label="场景预设">${Object.entries(themes).map(([k,v])=>`<option value="${k}">${v.label} · ${v.description}</option>`).join('')}</select>
       <button class="btn" type="button" id="load-theme">载入</button>
@@ -97,7 +147,7 @@ document.querySelector('#app').innerHTML=`
     <section class="viewer" aria-label="自由建造沙盘">
       <div class="viewbar">
         <div class="view-label">${icon('cube',16)} <span id="plot-title"></span><small>LIVE DIORAMA</small></div>
-        <span class="seed-tag" id="seed-tag"></span>
+        <div class="view-actions"><span class="seed-tag" id="seed-tag"></span><button class="btn icon-btn relocate-btn" type="button" id="relocate" aria-label="重新放置探访者" title="重新放置探访者" hidden>${icon('pin',15)}</button><button class="btn explorer-btn" type="button" id="explore">${icon('walk',16)} <span id="explore-label">放置探访者</span></button></div>
       </div>
       <div class="stage" id="stage" tabindex="-1">
         <div class="stage-head"><span class="badge" id="mode-tag"></span><span class="badge" id="weather-tag"></span></div>
@@ -109,6 +159,22 @@ document.querySelector('#app').innerHTML=`
             <button class="btn compass-home" id="atlas-home" type="button" aria-label="回到起点" title="回到起点">${icon('cabin',14)}</button>
             <button class="btn compass-e" type="button" data-move="1,0" aria-label="向东拓展" title="向东拓展">→</button>
             <button class="btn compass-s" type="button" data-move="0,1" aria-label="向南拓展" title="向南拓展">↓</button>
+          </div>
+        </div>
+        <div class="spawn-hint" id="spawn-hint" hidden><strong>选一处干燥地面放置探访者</strong><button type="button" class="btn" id="quick-spawn">从步道出发</button></div>
+        <div class="walker-hud" id="walker-hud" hidden>
+          <article class="walk-note" id="walk-note" hidden><strong></strong><p></p></article>
+          <div class="walk-info"><strong>探访者</strong><span id="nearby">靠近动物、树木或建筑</span></div>
+          <div class="walk-actions">
+            <button type="button" class="btn" id="observe">${icon('book',16)} 观察 <kbd>E</kbd></button>
+            <button type="button" class="btn" id="chop">${icon('axe',16)} 伐木 <kbd>F</kbd></button>
+            <span class="wood-badge" id="wood-count"></span>
+          </div>
+          <div class="dpad" aria-label="角色移动">
+            <button type="button" class="walk-n" aria-label="向前走" data-walk="forward">↑</button>
+            <button type="button" class="walk-w" aria-label="向左走" data-walk="left">←</button>
+            <button type="button" class="walk-s" aria-label="向后走" data-walk="back">↓</button>
+            <button type="button" class="walk-e" aria-label="向右走" data-walk="right">→</button>
           </div>
         </div>
         <div class="stage-tools">
@@ -134,12 +200,17 @@ document.querySelector('#app').innerHTML=`
       </div>
     </section>
     <aside class="panel" aria-label="建造图鉴">
-      <div class="panel-head"><span class="stamp">${icon('layers',19)}</span><div><h2>建造图鉴</h2><small>BUILDING LIBRARY</small></div><span class="panel-count" id="panel-count"></span></div>
+      <div class="panel-head"><span class="stamp">${icon('layers',19)}</span><div><h2>建造素材库</h2><small>DESIGN LIBRARY</small></div><span class="panel-count" id="panel-count"></span></div>
       <div class="catalog-tabs" id="categories" role="group" aria-label="预设分类">
-        ${Object.entries(catalog).map(([key,value])=>`<button class="option" type="button" data-category="${key}" aria-pressed="${key===category}">${icon(value.icon,15)}${value.name}</button>`).join('')}
+        ${Object.entries(views).map(([key,value])=>`<button class="option" type="button" data-category="${key}" aria-pressed="${key===category}">${icon(value.icon,15)}${value.name}</button>`).join('')}
       </div>
-      <div id="catalog" class="catalog-grid"></div>
+      <div class="catalog-filters"><label class="search-field">${icon('search',15)}<input type="search" id="catalog-search" aria-label="搜索素材" placeholder="搜索当前分类"></label><select id="catalog-filter" aria-label="筛选类型"><option value="">全部类型</option></select></div>
+      <div id="catalog" class="catalog-grid" aria-label="素材列表"></div>
+    </aside>
+    <aside class="panel properties" aria-label="属性与图鉴">
+      <div class="panel-head"><span class="stamp">${icon('book',18)}</span><div><h2>属性与图鉴</h2><small>FIELD GUIDE</small></div></div>
       <div id="inspector" class="inspector"></div>
+      <article class="guide-card" id="guide-card"></article>
       <section class="biome-panel" aria-label="生态群落">
         <div class="biome-mark">${icon('pine',17)}</div>
         <div class="biome-copy"><strong id="biome-name"></strong><small id="biome-detail"></small></div>
@@ -153,7 +224,12 @@ document.querySelector('#app').innerHTML=`
   </div>
   <footer class="footer"><span>LINQI STUDIO / FIELD NOTES</span><span id="world-count"></span></footer>
 </main>
-<div role="status" id="toast"></div>`;
+<div role="status" id="toast"></div>
+<dialog id="journal-dialog" aria-labelledby="journal-title">
+  <div class="journal-head"><div><div class="eyebrow">FIELD NOTES</div><h2 id="journal-title">观察笔记</h2></div><button type="button" class="btn" id="journal-close" aria-label="关闭笔记">关闭</button></div>
+  <div class="journal-meta" id="journal-meta"></div>
+  <div id="journal-list"></div>
+</dialog>`;
 
 const stage=byId('stage'), inspector=byId('inspector');
 function announce(text){
@@ -165,6 +241,8 @@ function announce(text){
 }
 const selectedObject=()=>world.objects.find(o=>o.id===selected);
 function toolTip(){
+  if(mode==='spawn')return '点击地面放置角色，或从预设步道出发。';
+  if(mode==='walk')return 'WASD 或方向键移动 · 拖动画面转向 · E 观察 · F 伐木 · Esc 返回建造。';
   if(mode!=='build') {
     if(mode==='camera'&&open)return matchMedia('(pointer: coarse)').matches?'拖动前往相邻领地，双指旋转或缩放。':'拖动前往相邻领地，右键拖动旋转，滚轮缩放。';
     return help[mode];
@@ -172,30 +250,121 @@ function toolTip(){
   const o=items[active];
   if(o.category==='house') return '在地面拖出轮廓生成建筑，也可单击放置。';
   if(o.brush) return '在地面按住拖画，单击可以盖一个圆形笔印。';
-  return '点击地面放置景观，切换到「选择」可以搬动。';
+  if(o.category==='animal')return waterAnimal({type:o.id})?'点击足够深的水面放置。':'点击开阔地面放置，动物会在附近活动。';
+  return '点击地面放置，切换到「选择」可移动和旋转。';
 }
 function showMode(){
   for(const key of Object.keys(toolLabels)) byId('mode-'+key).setAttribute('aria-pressed',key===mode);
-  byId('mode-tag').textContent=mode==='build' ? '建造 / '+items[active].name : toolLabels[mode];
+  byId('mode-tag').textContent=mode==='build'?'建造 / '+items[active].name:toolModes[mode];
+  byId('explore-label').textContent=['walk','spawn'].includes(mode)?'返回建造':hasVisitor?'继续探索':'放置探访者';
+  byId('explore').setAttribute('aria-pressed',['walk','spawn'].includes(mode));
+  byId('relocate').hidden=!hasVisitor||['walk','spawn'].includes(mode);
+  byId('walker-hud').hidden=mode!=='walk';
+  byId('spawn-hint').hidden=mode!=='spawn';
   byId('tool-tip').textContent=toolTip();
   stage.dataset.mode=mode;
   viewport?.cameraMode(mode==='camera');
   viewport?.showFootprint(mode==='select' ? selectedObject() : null,true,true);
 }
 function renderCatalog(){
-  const values=catalog[category].items;
-  for(const b of byId('categories').children) b.setAttribute('aria-pressed',b.dataset.category===category);
-  byId('panel-count').textContent=String(values.length).padStart(2,'0')+' 款';
-  byId('catalog').innerHTML=values.map(([id])=>{
+  const candidates=views[category].types.flatMap(key=>catalog[key].items.map(([id])=>items[id]));
+  for(const b of byId('categories').children)b.setAttribute('aria-pressed',b.dataset.category===category);
+  const families=[...new Set(candidates.map(o=>o.family))];
+  const selector=byId('catalog-filter');
+  if(!families.includes(filter))filter='';
+  selector.innerHTML='<option value="">全部类型</option>'+families.map(f=>`<option value="${f}">${f}</option>`).join('');
+  selector.value=filter;
+  const query=byId('catalog-search').value.trim().toLowerCase();
+  const values=candidates.filter(o=>(!filter||o.family===filter)&&(!query||[o.name,o.detail,o.id].some(v=>v.toLowerCase().includes(query))));
+  byId('panel-count').textContent=values.length+' / '+total;
+  byId('catalog').innerHTML=values.length?values.map(o=>`
+    <button type="button" class="preset-card" data-item="${o.id}" aria-pressed="${active===o.id&&mode==='build'}">
+      <span class="preview-icon" style="--card-tint:${o.color}">${thumbnail(o)}</span>
+      <span class="preset-copy"><strong>${o.name}</strong><small>${o.detail}</small></span>
+    </button>`).join(''):'<p class="catalog-empty">没有匹配的素材。试试其他名称或类型。</p>';
+}
+let hasVisitor=false,observedType=null;
+function showJournalCount(){
+  byId('journal-count').textContent=journal.seen.length;
+  byId('wood-count').textContent='木材 '+journal.wood;
+}
+function renderGuide(){
+  const type=mode==='walk'?(observedType??nearby?.observe?.type??active):selectedObject()?.type??active;
+  const o=items[type], source=guideSources[o.source];
+  byId('guide-card').innerHTML=`<div class="guide-art" style="--card-tint:${o.color}">${thumbnail(o)}</div>
+    <div class="guide-content"><div class="guide-kicker">${o.family} · FIELD GUIDE</div><h3>${o.name}</h3><p>${o.fact}</p>
+    ${source?`<a href="${source[1]}" target="_blank" rel="noopener noreferrer">${source[0]} ↗</a>`:''}
+    ${journal.seen.includes(type)?'<span class="observed">✓ 已记入观察笔记</span>':''}</div>`;
+}
+function renderJournal(){
+  byId('journal-meta').textContent=`已记录 ${journal.seen.length} / ${total} · 木材 ${journal.wood}`;
+  byId('journal-list').innerHTML=journal.seen.length?[...journal.seen].reverse().map(id=>{
     const o=items[id];
-    return `<button type="button" class="preset-card" data-item="${id}" aria-pressed="${active===id && mode==='build'}"><span class="preview-icon" style="--card-tint:${o.color}">${thumbnail(o)}</span><span class="preset-copy"><strong>${o.name}</strong><small>${o.detail}</small></span></button>`;
-  }).join('');
+    return `<article class="journal-entry"><div class="journal-art" style="--card-tint:${o.color}">${thumbnail(o)}</div>
+      <div><small>${o.family}</small><h3>${o.name}</h3><p>${o.fact}</p></div></article>`;
+  }).join(''):'<p class="journal-empty">建造、种植、绘制地形，或在漫步时靠近动物按 E。记录会出现在这里。</p>';
+}
+function updateNearby(value){
+  nearby=value;
+  const target=value?.observe,tree=value?.tree;
+  byId('nearby').textContent=target?'附近 · '+items[target.type].name:tree?'附近 · '+items[tree.type].name:'靠近动物、树木或建筑';
+  byId('observe').disabled=!target;
+  byId('chop').disabled=!tree;
+}
+function startExploring(x,z){
+  if(!viewport?.beginWalk(x,z)){announce('这里无法站立，试试开阔的干地。');return;}
+  hasVisitor=true;observedType=null;strike=null;
+  mode='walk';
+  showMode();renderInspector();renderGuide();renderCatalog();
+  stage.focus({preventScroll:true});
+}
+function endExploring(){
+  viewport?.endWalk();
+  observedType=null;
+  strike=null;
+  clearTimeout(fieldNoteTimer);byId('walk-note').hidden=true;
+}
+function observeNow(){
+  if(mode!=='walk')return;
+  const target=viewport.observe();
+  if(!target){announce('走近想观察的对象。');return;}
+  observedType=target.type;
+  const first=record(target.type);
+  renderGuide();
+  const note=byId('walk-note'),item=items[target.type];
+  note.querySelector('strong').textContent=item.name;
+  note.querySelector('p').textContent=item.fact;
+  note.hidden=false;
+  clearTimeout(fieldNoteTimer);
+  fieldNoteTimer=setTimeout(()=>{note.hidden=true;},6500);
+  announce(first?'已记录 · '+items[target.type].name:target.kind==='animal'?'它停下来朝你望了望。':'观察 · '+items[target.type].name);
+}
+function chopNow(){
+  if(mode!=='walk')return;
+  const target=viewport.chop();
+  if(!target)return;
+  const tag=[rx,rz,world.seed,target.id??'wild-'+target.key,round(target.x),round(target.z)].join('/');
+  strike=strike?.tag===tag?{tag,count:strike.count+1}:{tag,count:1};
+  if(strike.count<3){announce(`伐木 ${strike.count} / 3 · ${items[target.type].name}`);return;}
+  strike=null;
+  const gained=!journal.harvested.includes(tag);
+  if(gained){
+    journal.wood+=2;journal.harvested.push(tag);saveJournal();showJournalCount();
+  }
+  record(target.type);
+  if(target.id!==undefined)commit({...world,objects:world.objects.filter(o=>o.id!==target.id)});
+  else commit({...world,felled:[...new Set([...(world.felled??[]),target.key])]});
+  announce(gained?'已伐下树木 · 收集到木料':'已伐下树木');
 }
 function objectRange(key,value,min,max,title,unit){
   return `<label class="range"><span>${title}</span><input type="range" data-size="${key}" min="${min}" max="${max}" step=".1" value="${value}"><output>${Number(value).toFixed(1)} ${unit}</output></label>`;
 }
 function renderInspector(){
   const o=selectedObject();
+  if(mode==='walk'||mode==='spawn'){
+    inspector.innerHTML=`<div class="inspector-head"><strong>探访者</strong><span>${mode==='walk'?'探索中':'放置中'}</span></div><p>${toolTip()}</p>`;
+    return;
+  }
   if(mode==='select'&&o){
     const house=items[o.type].category==='house';
     const original=['cedar','alpine','shed'].includes(o.type);
@@ -256,6 +425,8 @@ function sync(){
   viewport?.update(world,open?{x:rx,z:rz,read:readRegion}:null);
   showMode();
   renderInspector();
+  renderGuide();
+  showJournalCount();
 }
 function commit(next){
   before.push(world);
@@ -300,6 +471,7 @@ function restoreHistory(){
 }
 function travel(dx,dz,follow=false){
   if(!open||(!dx&&!dz)||!Number.isSafeInteger(rx+dx)||!Number.isSafeInteger(rz+dz))return;
+  if(mode==='walk'&&!follow){endExploring();mode='camera';}
   cancelDraft();
   stashHistory();
   selected=null;
@@ -313,6 +485,7 @@ function travel(dx,dz,follow=false){
   announce(`${biomes[biomeOf(world)].label} · ${rx}, ${rz}`);
 }
 function toggleMap(){
+  endExploring();
   cancelDraft();
   stashHistory();
   selected=null;
@@ -328,11 +501,13 @@ function toggleMap(){
   announce(open?'拖动地图或使用方向键，前往相邻领地':'已回到起点沙盘');
 }
 function switchMode(next){
+  if(mode==='walk'&&next!=='walk')endExploring();
   cancelDraft();
   mode=next;
   showMode();
   renderCatalog();
   renderInspector();
+  renderGuide();
 }
 const isHouse=o=>items[o.type].category==='house';
 function overlap(a,b){
@@ -345,9 +520,13 @@ function overlap(a,b){
   return true;
 }
 function validObject(o){
-  const house=isHouse(o);
-  if(!footprint(o,house?.23:.04).every(([x,z])=>inBounds(x,z,.15)&&viewport.depth(x,z)<.61)) return false;
-  if(viewport.depth(o.x,o.z)>.52) return false;
+  const def=items[o.type],house=isHouse(o);
+  if(def.category==='animal')return viewport.canPlace(o);
+  const wet=viewport.depth(o.x,o.z);
+  if(def.form==='lily')return inBounds(o.x,o.z,.2)&&wet>.68;
+  const bridge=def.form==='bridge';
+  if(!footprint(o,house?.23:.04).every(([x,z])=>inBounds(x,z,.15)&&(bridge||viewport.depth(x,z)<.61)))return false;
+  if(!bridge&&wet>.52)return false;
   return !world.objects.some(other=>other.id!==o.id&&isHouse(other)&&overlap(o,other));
 }
 function createShape(type,x,z,id=nextId){
@@ -414,6 +593,8 @@ function addBrushPoint(p){
 }
 function down(p){
   if(!p) return;
+  if(mode==='spawn'){startExploring(p.x,p.z);return;}
+  if(mode==='walk')return;
   if(open&&!inBounds(p.x,p.z,.08)){
     announce('请先漫游到这片领地，再编辑它');
     return;
@@ -426,6 +607,7 @@ function down(p){
     selected=p.id;
     const o=selectedObject();
     renderInspector();
+    renderGuide();
     viewport.showFootprint(o,true,true);
     if(o) draft={kind:'move',start:p,object:o};
     return;
@@ -459,19 +641,22 @@ function up(p){
   if(current.kind==='brush'){
     addBrushPoint(p);
     cancelDraft();
+    record(current.stroke.type);
     commit({...world,strokes:[...world.strokes,current.stroke]});
     return;
   }
   const o=p&&(current.kind!=='move'||Math.hypot(p.x-current.start.x,p.z-current.start.z)>.13)?dragShape(p):current.object;
   cancelDraft();
   if(current.kind==='create'){
-    if(!validObject(o)){announce('请换一处干燥、宽敞的地面');return;}
+    if(!validObject(o)){announce(waterAnimal(o)||items[o.type].form==='lily'?'请选一处足够深且宽敞的水面。':'请换一处开阔、合适的地面。');return;}
+    if(items[o.type].category!=='animal')record(o.type);
     commit({...world,objects:[...world.objects,o]});
     announce(items[o.type].name+'已建好');
   } else if(JSON.stringify(o)!==JSON.stringify(current.object)) updateObject(o);
 }
 function hover(p){
-  if(mode==='camera'||mode==='select'){viewport.cursor(null);return;}
+  if(mode==='camera'||mode==='select'||mode==='walk'){viewport.cursor(null);return;}
+  if(mode==='spawn'){viewport.cursor(p,.33,Boolean(p&&inBounds(p.x,p.z,.3)&&viewport.depth(p.x,p.z)<.45));return;}
   if(!p||!inBounds(p.x,p.z,.10)){viewport.cursor(null);viewport.showFootprint(null);return;}
   if(mode==='build'&&items[active].category==='house'){
     const o=createShape(active,p.x,p.z);
@@ -502,7 +687,7 @@ function onInput(kind,p){
   }
 }
 
-try{viewport=createViewport(stage,text=>{byId('metrics').textContent=text;},onInput,travel);}
+try{viewport=createViewport(stage,text=>{byId('metrics').textContent=text;},onInput,travel,updateNearby);}
 catch(error){
   console.error(error);
   stage.insertAdjacentHTML('afterbegin','<div class="render-error">当前浏览器无法启动 WebGL 2。<br>请使用启用硬件加速的浏览器打开沙盘。</div>');
@@ -519,9 +704,12 @@ byId('categories').addEventListener('click',e=>{
   const target=e.target.closest('[data-category]');
   if(!target) return;
   category=target.dataset.category;
+  filter='';byId('catalog-search').value='';
   renderCatalog();
   byId('catalog').scrollTop=0;
 });
+byId('catalog-search').addEventListener('input',()=>{renderCatalog();byId('catalog').scrollTop=0;});
+byId('catalog-filter').addEventListener('change',e=>{filter=e.target.value;renderCatalog();byId('catalog').scrollTop=0;});
 byId('catalog').addEventListener('click',e=>{
   const target=e.target.closest('[data-item]');
   if(!target) return;
@@ -572,11 +760,38 @@ byId('load-theme').addEventListener('click',()=>{
   cancelDraft();
   selected=null;
   const name=byId('theme').value;
+  if(mode==='walk'||mode==='spawn'){endExploring();mode='build';}
   commit(preset(name));
   viewport?.reset();
   announce(`已载入${themes[name].label}，可撤销`);
 });
 byId('map-mode').addEventListener('click',toggleMap);
+byId('explore').addEventListener('click',()=>{
+  if(mode==='walk'||mode==='spawn'){switchMode('build');return;}
+  if(hasVisitor){startExploring();return;}
+  switchMode('spawn');
+});
+byId('relocate').addEventListener('click',()=>switchMode('spawn'));
+byId('quick-spawn').addEventListener('click',()=>startExploring());
+byId('observe').addEventListener('click',observeNow);
+byId('chop').addEventListener('click',chopNow);
+for(const key of document.querySelectorAll('[data-walk]')){
+  key.addEventListener('pointerdown',e=>{
+    e.preventDefault();
+    key.setPointerCapture(e.pointerId);
+    viewport?.move(key.dataset.walk,true);
+  });
+  for(const type of ['pointerup','pointercancel','lostpointercapture'])
+    key.addEventListener(type,()=>viewport?.move(key.dataset.walk,false));
+}
+const journalDialog=byId('journal-dialog');
+byId('journal-open').addEventListener('click',()=>{
+  viewport?.clearMovement();renderJournal();journalDialog.showModal();
+});
+byId('journal-close').addEventListener('click',()=>journalDialog.close());
+window.addEventListener('blur',()=>viewport?.clearMovement());
+document.addEventListener('visibilitychange',()=>{if(document.hidden)viewport?.clearMovement();});
+document.addEventListener('keyup',e=>{const key=walkKeys[e.key.toLowerCase()];if(key)viewport?.move(key,false);});
 byId('atlas-controls').addEventListener('click',e=>{
   const button=e.target.closest('button');
   if(!button)return;
@@ -593,21 +808,28 @@ byId('motion').addEventListener('click',()=>{
 });
 byId('undo').addEventListener('click',()=>history());
 byId('redo').addEventListener('click',()=>history(true));
-byId('reset').addEventListener('click',()=>{cancelDraft();viewport?.reset();});
-byId('top').addEventListener('click',()=>{cancelDraft();viewport?.reset(true);});
+byId('reset').addEventListener('click',()=>{if(mode==='walk')switchMode('build');cancelDraft();viewport?.reset();});
+byId('top').addEventListener('click',()=>{if(mode==='walk')switchMode('build');cancelDraft();viewport?.reset(true);});
 byId('expand').addEventListener('click',async()=>{
   if(stage.classList.contains('maximized')) stage.classList.remove('maximized');
   else if(document.fullscreenElement===stage) await document.exitFullscreen();
   else {try{await stage.requestFullscreen();}catch{stage.classList.add('maximized');stage.focus();}}
 });
 document.addEventListener('keydown',e=>{
+  if(journalDialog.open)return;
   if(e.key==='Escape'){
+    if(mode==='walk'||mode==='spawn')switchMode('build');
     cancelDraft();
     stage.classList.remove('maximized');
     return;
   }
   if(e.target.matches('input,textarea,select'))return;
   const key=e.key.toLowerCase();
+  if(mode==='walk'&&!e.metaKey&&!e.ctrlKey&&!e.altKey){
+    if(walkKeys[key]){e.preventDefault();viewport?.move(walkKeys[key],true);return;}
+    if(key==='e'&&!e.repeat){observeNow();return;}
+    if(key==='f'&&!e.repeat){chopNow();return;}
+  }
   if((e.metaKey||e.ctrlKey)&&['z','y'].includes(key)){e.preventDefault();history(e.shiftKey||key==='y');return;}
   if(e.metaKey||e.ctrlKey||e.altKey)return;
   const direction={arrowleft:[-1,0],arrowright:[1,0],arrowup:[0,-1],arrowdown:[0,1]}[key];

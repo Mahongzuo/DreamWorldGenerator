@@ -1,10 +1,14 @@
 import * as T from 'three';
 import {batch, buildCabin, contactShadow, randFrom} from './model.js';
-import {baseHeight, biomeOf, biomes, continentHeight, contour, footprint, inFootprint, inside, items, LAND, themes, tileInside, tileShift} from './sandbox-state.js';
+import {baseHeight, biomeOf, biomes, continentHeight, contour, footprint, inFootprint, inside, items, LAND, themes, tileInside, tileShift, waterAnimal} from './sandbox-state.js';
+
+import {buildArchitecture, buildDecor, buildPlant} from './asset-models.js';
+import {buildCreature} from './creatures.js';
+import {createNavigation} from './navigation.js';
 
 const SIZE = 320;
-const waterIds = ['brook','jade','lotus','pond'];
-const grassIds = ['lawn','flowers','heather','moss'];
+const waterIds = Object.keys(items).filter(id=>items[id].category==='water');
+const grassIds = Object.keys(items).filter(id=>['grass','terrain'].includes(items[id].category));
 const roadIds = ['stonepath','dirtpath'];
 const ox = (x) => (.5 + x / (LAND.x * 2.18)) * SIZE;
 const oz = (z) => (.5 + z / (LAND.z * 2.18)) * SIZE;
@@ -58,15 +62,20 @@ export function makeField(world,region) {
   }
   const rivers = world.strokes.filter(s=>items[s.type].category === 'water');
   for (const [width,depth] of [[.95,26],[.42,97],[.03,222],[-.17,255]]) {
-    for (const s of rivers) drawStroke(water,s.p,s.w+width,`rgb(${(waterIds.indexOf(s.type)+1)*42},${depth},0)`);
+    for (const s of rivers) drawStroke(water,s.p,s.w+width,`rgb(${(waterIds.indexOf(s.type)+1)*24},${depth},0)`);
   }
   for (const s of world.strokes) {
-    if (grassIds.includes(s.type)) drawStroke(grass,s.p,s.w,`rgb(${(grassIds.indexOf(s.type)+1)*50},0,0)`);
+    if (grassIds.includes(s.type)){
+      const id=(grassIds.indexOf(s.type)+1)*10;
+      for(const [scale,height] of [[1,.18],[.81,.54],[.61,.87],[.42,1]]){
+        drawStroke(grass,s.p,s.w*scale,`rgb(${id},${Math.round(height*255)},0)`);
+      }
+    }
     if (roadIds.includes(s.type)) drawStroke(path,s.p,s.w,`rgb(${(roadIds.indexOf(s.type)+1)*60},0,0)`);
   }
   water.globalCompositeOperation = 'destination-out';
   for (const o of world.objects) {
-    if (items[o.type].category !== 'house') continue;
+    if (items[o.type].category !== 'house'||items[o.type].form==='bridge') continue;
     water.beginPath();
     footprint(o,.47).forEach(([x,z],i)=>i ? water.lineTo(ox(x),oz(z)) : water.moveTo(ox(x),oz(z)));
     water.closePath();
@@ -81,12 +90,19 @@ export function makeField(world,region) {
   const depth = (x,z) => {const i=index(x,z);return data[0][i+1]*data[0][i+3]/65025*edgeFade(x,z);};
   const type = (channel,x,z) => {
     const i=index(x,z);
-    return data[channel][i+3] < 130 ? 0 : Math.round(data[channel][i]/[42,50,60][channel]);
+    return data[channel][i+3] < 130 ? 0 : Math.round(data[channel][i]/[24,10,60][channel]);
   };
-  return {data, depth, type, level,
+  function paint(x,z){
+    return roadIds[type(2,x,z)-1]??waterIds[type(0,x,z)-1]??grassIds[type(1,x,z)-1];
+  }
+  return {data, depth, type, level, paint,
     height(x,z) {
-      const ground=surface(x,z), wet=depth(x,z);
-      return region ? ground+Math.min(-.13,level-.37-ground)*wet : ground-.54*wet;
+      const i=index(x,z);
+      const top=items[grassIds[Math.round(data[1][i]/10)-1]];
+      const relief=top?.category==='terrain'?(top.depth??0)*data[1][i+1]*data[1][i+3]/65025*edgeFade(x,z):0;
+      const ripples=top?.form==='dune'?relief*.16*Math.sin(x*2.1+z*.43):0;
+      const ground=surface(x,z)+relief+ripples, wet=depth(x,z);
+      return ground+Math.min(-.13,level-.37-ground)*wet;
     }};
 }
 
@@ -155,7 +171,7 @@ function makeWater(kit,world,field,region) {
     if (data[i+1]<170 || data[i+3]<142) continue;
     const n=i/4, x=n%SIZE, z=Math.floor(n/SIZE);
     if(region && !tileInside((x/SIZE-.5)*LAND.x*2.18,(z/SIZE-.5)*LAND.z*2.18,.34)) continue;
-    scratch.copy(at(hues,Math.max(0,Math.round(data[i]/42)-1))).multiplyScalar(.78+.12*Math.sin(x*.145+z*.062)+random()*.11);
+    scratch.copy(at(hues,Math.max(0,Math.round(data[i]/24)-1))).multiplyScalar(.78+.12*Math.sin(x*.145+z*.062)+random()*.11);
     scratch.getRGB(scratch,T.SRGBColorSpace);
     image.data[i]=scratch.r*255; image.data[i+1]=scratch.g*255; image.data[i+2]=scratch.b*255; image.data[i+3]=255;
   }
@@ -254,7 +270,7 @@ function camp(parts,x,y,z,s,random) {
   }
 }
 
-function landscape(kit,world,field,region) {
+function landscape(kit,world,field,region,trees,bridges) {
   const parts=batch(kit), random=randFrom(world.seed+'biome');
   const biome=biomes[biomeOf(world)];
   const flora=world.biome?biome.growth:themes[world.theme].growth;
@@ -263,20 +279,29 @@ function landscape(kit,world,field,region) {
   const inBounds=(x,z,m)=>region?tileInside(x,z,m):inside(x,z,m);
   const houses=world.objects.filter(o=>items[o.type].category==='house');
   const clear=(x,z,padding)=>houses.some(o=>inFootprint(x,z,o,padding));
-  const treeSites=[];
-  const sample=(radius=.95)=>{
-    if(region) return [(random()*2-1)*LAND.x*radius,(random()*2-1)*LAND.z*radius];
-    const angle=random()*Math.PI*2,r=Math.sqrt(random())*radius*contour(angle);
+  const treeSites=[],treeRandom=randFrom(world.seed+'tree-sites'),felled=new Set(world.felled);
+  const sample=(radius=.95,rng=random)=>{
+    if(region) return [(rng()*2-1)*LAND.x*radius,(rng()*2-1)*LAND.z*radius];
+    const angle=rng()*Math.PI*2,r=Math.sqrt(rng())*radius*contour(angle);
     return [Math.cos(angle)*r*LAND.x,Math.sin(angle)*r*LAND.z];
   };
   for(let i=0;flora && i<190 && treeSites.length<(coarse?Math.ceil(limit*.55):limit);i++){
-    const [x,z]=sample(.96);
+    const [x,z]=sample(.96,treeRandom);
     const v=Math.hypot(x/LAND.x,z/LAND.z);
     if((!world.biome && (v<.6 || (z>1.5 && v<.84))) || field.depth(x,z)>.12 || field.type(2,x,z) || clear(x,z,1.1) ||
-      world.objects.some(o=>Math.hypot(o.x-x,o.z-z)<1.55) || treeSites.some(([tx,tz])=>Math.hypot(tx-x,tz-z)<1.65)) continue;
+      world.objects.some(o=>items[o.type].category!=='animal'&&Math.hypot(o.x-x,o.z-z)<1.55) || treeSites.some(([tx,tz])=>Math.hypot(tx-x,tz-z)<1.65)) continue;
     treeSites.push([x,z]);
-    const h=(1.7+random()*2.35)*(z<-1.4 ? 1.16 : .73);
-    tree(parts,random()<.63 ? flora : (flora==='pine'?'broadleaf':'pine'),x,z,field.height(x,z),h,random,world.season);
+    const rng=randFrom(world.seed+'tree-'+i);
+    const h=(1.7+rng()*2.35)*(z<-1.4 ? 1.16 : .73);
+    const kind=rng()<.63 ? flora : (flora==='pine'?'broadleaf':'pine');
+    const y=field.height(x,z);
+    if(felled.has(i)){
+      parts.put('disc','wood','#795c45',x,y+.11,z,h*.055,.22,h*.055);
+      parts.put('disc','basic','#bb9a6a',x,y+.227,z,h*.046,.02,h*.046);
+      continue;
+    }
+    trees.push({key:i,type:kind==='broadleaf'?'oak':kind,x,z,r:h*.051,crown:h*(kind==='pine'?.20:.29)});
+    tree(parts,kind,x,z,y,h,rng,world.season);
   }
   const grasses=landColors[world.season] ?? (world.biome?biome.colors:themes[world.theme].colors);
   for(let i=0;i<(coarse?290:1250);i++){
@@ -292,6 +317,14 @@ function landscape(kit,world,field,region) {
     }
     if(field.type(2,x,z)) continue;
     const y=field.height(x,z), size=.14+random()*.31;
+    const paint=items[grassIds[grass-1]];
+    if(paint?.category==='terrain'){
+      if(['rock','gravel','paving'].includes(paint.form)&&i%3===0){
+        const s=paint.form==='rock'?.25+random()*.58:.08+random()*.24;
+        rock(parts,paint.accent,x,y+s*.23,z,s,s*.58,s*.81,random()*6);
+      }
+      if(['rock','sand','dune','paving','flat','snow'].includes(paint.form))continue;
+    }
     if(wet>.13&&wet<.66&&i%4===0&&biomeOf(world)==='wetland'){
       parts.put('grass','grass','#899353',x,y,z,size*.83,size*2.13,size*.82,0,random()*6,0,false);
     }
@@ -308,7 +341,7 @@ function landscape(kit,world,field,region) {
     }
     const shade=grass ? items[grassIds[grass-1]].color : grasses[i%grasses.length];
     parts.put('grass','grass',shade,x,y,z,size,size*(.38+random()*.52),size,0,random()*6,0,false);
-    if(world.season!=='winter' && (grass===2 || grass===3 || i%27===0)) {
+    if(world.season!=='winter' && (grass===2 || grass===3 || paint?.form==='flower' || i%27===0)) {
       const petals=grass===3 ? ['#b786ac','#d0a8c3','#e1bac5'] : ['#f0ddab','#eac57b','#fff0c3'];
       for(let j=0;j<(grass===2||grass===3?4:2);j++){
         const px=x+(random()-.5)*.48,pz=z+(random()-.5)*.47,h=.13+random()*.19;
@@ -340,6 +373,7 @@ function landscape(kit,world,field,region) {
       const wet=crossing(x,z)||crossing(x+Math.sin(a)*near,z+Math.cos(a)*near)||crossing(x-Math.sin(a)*near,z-Math.cos(a)*near);
       if(wet){
         const h=Math.max(field.level+.29,y+.075);
+        bridges.push({x,z,a,w:s.w*1.17,h});
         parts.box(dist%1<.3?'#a67a52':'#bc9063',x,h,z,s.w*1.17,.112,.275,{surface:'wood',ry:a});
         for(const sign of [-1,1]){
           const px=x+Math.cos(a)*s.w*.57*sign,pz=z-Math.sin(a)*s.w*.57*sign;
@@ -393,7 +427,8 @@ function makeTileTerrain(world,field,region){
 export function buildLand(kit,world,region) {
   const group=new T.Group(),field=makeField(world,region);
   const surface=region?makeTileTerrain(world,field,region):makeTerrain(world,field);
-  group.add(surface,landscape(kit,world,field,region));
+  const trees=[],bridges=[];
+  group.add(surface,landscape(kit,world,field,region,trees,bridges));
   if(!region){
     const shadow=contactShadow();
     shadow.scale.set(1.58,1.47,1);
@@ -402,7 +437,7 @@ export function buildLand(kit,world,region) {
   }
   if(world.strokes.some(s=>items[s.type].category==='water')) group.add(makeWater(kit,world,field,region));
   if(region?.coarse) group.traverse(mesh=>{if(mesh.isMesh)mesh.castShadow=false;});
-  group.userData={surface,field};
+  group.userData={surface,field,navigation:createNavigation(world,field,region,trees,bridges)};
   return group;
 }
 
@@ -581,18 +616,28 @@ function tower(kit,o) {
   return parts.finish(new T.Group());
 }
 
+export function objectHeight(field,o){
+  const def=items[o.type];
+  if(waterAnimal(o)||def.form==='lily'||(def.form==='bridge'&&field.depth(o.x,o.z)>.56))
+    return field.level+(waterAnimal(o)?.043:0);
+  return field.height(o.x,o.z);
+}
 export function buildObject(kit,o,world,field) {
-  const y=field.height(o.x,o.z), def=items[o.type];
+  const def=items[o.type], y=objectHeight(field,o);
   let group;
   if(o.type==='jiangnan'||o.type==='pavilion') group=oriental(kit,o);
   else if(o.type==='tudor') group=tudor(kit,o);
   else if(o.type==='tower') group=tower(kit,o);
+  else if(def.category==='house'&&!['cedar','alpine','shed'].includes(o.type))group=buildArchitecture(kit,o,def);
   else if(def.category==='house') {
     const c=Math.cos(o.a), s=Math.sin(o.a);
     group=buildCabin(kit,{roof:o.type==='cedar'?'gable':o.type,width:o.w,depth:o.d,seed:world.seed+'-'+o.id,wood:o.wood??'cedar',
       season:world.season,deck:o.deck!==false,chimney:o.chimney!==false,
       groundHeight:(x,z)=>field.height(o.x+x*c+z*s,o.z-x*s+z*c)-y});
-  } else {
+  } else if(def.category==='animal')group=buildCreature(kit,o,def);
+  else if(def.category==='plant'&&!['pine','sakura','willow'].includes(o.type))group=buildPlant(kit,o,def,world.season);
+  else if(def.category==='decor'&&!['fire','rock','lantern'].includes(o.type))group=buildDecor(kit,o,def);
+  else {
     const parts=batch(kit),s=o.w,random=randFrom(world.seed+'-'+o.id);
     if(o.type==='fire') camp(parts,0,0,0,s,random);
     else if(o.type==='rock') {

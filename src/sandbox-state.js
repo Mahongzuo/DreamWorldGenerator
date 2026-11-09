@@ -1,3 +1,5 @@
+import {addedCatalog, originalNotes} from './field-guide.js';
+
 export const LAND = {x: 15, z: 11.4};
 export const MAX_OBJECTS = 120;
 export const MAX_STROKES = 100;
@@ -30,17 +32,24 @@ export const catalog = {
     ['stonepath','石板小径','画笔 · 遇水成桥','#a6a28b','#d0c3a2',1.15],
     ['dirtpath','砂土小路','画笔 · 遇水成桥','#b69d70','#c8b487',1.08],
     ['fence','木栅栏','拖画 · 自动立柱','#987048','#c2a174',.9],
-    ['pine','冷杉','树木 · 常青','#4e7850','#6b8e57',1.3],
-    ['sakura','山樱','树木 · 粉花','#c98894','#e6adad',1.55],
-    ['willow','垂柳','树木 · 水岸','#849c57','#adba6c',1.7],
     ['rock','叠石','摆件 · 苔石','#9b9b83','#728755',.85],
     ['lantern','石灯笼','摆件 · 暖光','#9a9a85','#e8bb73',.7],
     ['fire','营火','摆件 · 石环','#a49378','#f6ab5e',1.15]
   ]}
 };
+catalog.plant={name:'植物',icon:'tree',items:[]};
+catalog.animal={name:'动物',icon:'animal',items:[]};
+catalog.terrain={name:'地形',icon:'terrain',items:[]};
+for(const [category,entries] of Object.entries(addedCatalog)) catalog[category].items.push(...entries);
+
 export const items = Object.fromEntries(Object.entries(catalog).flatMap(([category,{items}]) =>
-  items.map(([id,name,detail,color,accent,width,depth]) => [id,{id,category,name,detail,color,accent,width,depth,
-    brush: category === 'water' || category === 'grass' || ['stonepath','dirtpath','fence'].includes(id)}])));
+  items.map(([id,name,detail,color,accent,width,depth,form,fact,source]) => [id,{id,category,name,detail,color,accent,width,depth,
+    family:detail.split(' · ')[0],form:form??id,fact:fact??originalNotes[id],source,
+    brush:['water','grass','terrain'].includes(category)||['stonepath','dirtpath','fence'].includes(id)}])));
+export const waterAnimal=o=>['duck','goose','swan','fish'].includes(items[o.type]?.form);
+export const flyingAnimal=o=>['owl','swallow','kingfisher','butterfly','dragonfly','bee'].includes(items[o.type]?.form);
+export const isTree=id=>items[id]?.category==='plant'&&['针叶树','阔叶树'].includes(items[id].family);
+export const isSolid=o=>items[o.type]?.category==='house'||['rock','stone-wall','standing-stone','well'].includes(o.type);
 
 export const themes = {
   pine: {label:'松溪谷', description:'雪松木屋与清蓝溪流', colors:['#8b9a59','#a7ae72','#5e8157','#77844e'], sky:'#d5e3ce', growth:'pine'},
@@ -132,6 +141,7 @@ export function normalize(data) {
     return true;
   };
   return {v:2, theme:data.theme, ...(Object.hasOwn(biomes,data.biome)?{biome:data.biome}:{}), seed:String(data.seed ?? 'FIELD').toUpperCase().replace(/[^A-Z0-9-]/g,'').slice(0,18) || 'FIELD',
+    felled:Array.isArray(data.felled)?[...new Set(data.felled.filter(k=>Number.isInteger(k)&&k>=0&&k<190))].slice(0,190):[],
     season:['summer','autumn','winter'].includes(data.season) ? data.season : 'summer',
     light:['day','gold','night'].includes(data.light) ? data.light : 'day',
     objects:data.objects.slice(0,MAX_OBJECTS).filter(o=>o && Object.hasOwn(items,o.type) && !items[o.type].brush && withId(o)).map(o=>{

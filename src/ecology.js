@@ -1,6 +1,8 @@
 import * as T from 'three';
 import {randFrom} from './model.js';
-import {biomeOf, inFootprint, inside, items, tileInside} from './sandbox-state.js';
+import {biomeOf, inFootprint, items} from './sandbox-state.js';
+import {makeWander, wander} from './navigation.js';
+import {architectureHeight} from './asset-models.js';
 
 const twoPi=Math.PI*2;
 const wingGeometry=(side)=>{
@@ -32,7 +34,7 @@ function meshOf(geometry,material,max){
   return mesh;
 }
 
-export function buildEcology(world,field,region) {
+export function buildEcology(world,field,region,nav) {
   const group=new T.Group();
   const biome=biomeOf(world);
   const random=randFrom(world.seed+'wildlife');
@@ -50,8 +52,9 @@ export function buildEcology(world,field,region) {
   };
   for(const m of Object.values(shapes)) group.add(m);
 
-  const safe=(x,z)=> (region?tileInside(x,z,.78):inside(x,z,.77)) && field.depth(x,z)<.33 &&
-    !world.objects.some(o=>inFootprint(x,z,o,items[o.type].category==='house'?.74:.18));
+  const safe=(x,z)=>nav.valid(x,z,.23,'land');
+  const targets=[];
+  const report=(type,a,x,z)=>targets.push({kind:'animal',type,x,z,agent:a});
   const findDry=(preferFlower=false)=>{
     let first;
     for(let i=0;i<76;i++){
@@ -67,20 +70,29 @@ export function buildEcology(world,field,region) {
   const kind=biome==='forest'||biome==='ridge'?'deer':'rabbit';
   for(let i=0;i<(kind==='deer'?3:4);i++){
     const center=findDry(kind==='rabbit');
-    if(center)runners.push({...center,kind,offset:random()*twoPi,scale:.85+random()*.27});
+    if(!center)continue;
+    const offset=random()*twoPi;
+    const agent=makeWander(nav,center.x,center.z,kind==='deer'?.43:.23,'land',offset,1.85);
+    if(agent)runners.push({agent,kind,offset,scale:.85+random()*.27});
   }
   const butterflies=[];
   if(biome==='meadow'||world.strokes.some(s=>['flowers','heather'].includes(s.type))){
     for(let i=0;i<6;i++){
       const center=findDry(true);
-      if(center) butterflies.push({...center,phase:random()*twoPi,color:['#efca79','#cb9bb4','#e4d39b'][i%3]});
+      if(!center)continue;
+      const phase=random()*twoPi;
+      const agent=makeWander(nav,center.x,center.z,.10,'fly',phase,1.35);
+      if(agent)butterflies.push({agent,phase,color:['#efca79','#cb9bb4','#e4d39b'][i%3]});
     }
   }
   const streams=world.strokes.filter(s=>items[s.type].category==='water');
   const ducks=[];
   for(let i=0;streams.length&&i<4;i++){
     const stream=streams[i%streams.length];
-    ducks.push({p:stream.p,phase:i*1.84+random()*.7,offset:(i-1.5)*.15});
+    const [x,z]=stream.p[Math.floor(stream.p.length*(.18+i*.17))];
+    const phase=i*1.84+random()*.7;
+    const agent=makeWander(nav,x,z,.16,'water',phase,2.7);
+    if(agent)ducks.push({agent,phase});
   }
   const flock=Array.from({length:7},(_,i)=>({a:i*.126+random()*.08,r:6.0+random()*1.9,
     y:5.65+random()*1.4,rate:3.5+random()*1.4,s:.69+random()*.18}));
@@ -133,46 +145,44 @@ export function buildEcology(world,field,region) {
       body('#594c40',side*.085,.246+pulse,.251,.019,.023,.017);
     }
   }
-  function waterAt(path,t){
-    if(path.length===1)return {x:path[0][0],z:path[0][1],angle:t*twoPi};
-    const idx=Math.min(path.length-2,Math.floor(t*(path.length-1))),w=t*(path.length-1)-idx;
-    const a=path[idx],b=path[idx+1];
-    return {x:T.MathUtils.lerp(a[0],b[0],w),z:T.MathUtils.lerp(a[1],b[1],w),angle:Math.atan2(b[0]-a[0],b[1]-a[1])};
-  }
-  function step(time,light='day'){
+  function step(time,light='day',dt=0){
+    targets.length=0;
     for(const m of Object.values(shapes)) m.count=0;
     for(const o of runners){
-      const a=time*(o.kind==='deer'?.22:.31)+o.offset;
-      let x=o.x+Math.cos(a)*.78,z=o.z+Math.sin(a)*.56;
-      if(!safe(x,z)){x=o.x;z=o.z;}
-      const y=field.height(x,z);
-      pose(x,y,z,Math.atan2(-Math.sin(a)*.78,Math.cos(a)*.56),o.scale);
-      if(o.kind==='deer')deer(time,o.offset);
-      else rabbit(time,o.offset);
+      const {agent:a}=o;
+      wander(nav,a,dt,o.kind==='deer'?.49:.39);
+      pose(a.x,nav.height(a.x,a.z),a.z,a.heading,o.scale);
+      if(o.kind==='deer')deer(a.rest>0?0:time,o.offset);
+      else rabbit(a.rest>0?0:time,o.offset);
+      report(o.kind,a,a.x,a.z);
     }
     for(const o of ducks){
-      const a=time*.115+o.phase;
-      const p=waterAt(o.p,.5+.39*Math.sin(a));
-      const x=p.x+Math.cos(p.angle)*o.offset,z=p.z-Math.sin(p.angle)*o.offset;
-      if(field.depth(x,z)<.73)continue;
-      pose(x,field.level+.065+.025*Math.sin(time*2.4+o.phase),z,p.angle+(Math.cos(a)<0?Math.PI:0));
+      const a=o.agent;
+      wander(nav,a,dt,.38);
+      pose(a.x,field.level+.065+.025*Math.sin(time*2.4+o.phase),a.z,a.heading);
       body('#c6b39a',0,.014,0,.135,.101,.20);
       body('#7e8262',0,.086,.125,.071,.089,.08);
       body('#497b64',0,.151,.144,.082,.074,.086);
       body('#e5aa50',0,.127,.233,.049,.026,.073);
       body('#f6e3bc',0,.081,.15,.076,.027,.065);
+      report('mallard',a,a.x,a.z);
     }
     for(const o of butterflies){
-      const a=time*.77+o.phase,x=o.x+Math.cos(a)*.61,z=o.z+Math.sin(a)*.57;
+      const a=o.agent;
+      wander(nav,a,dt,.57);
       const flap=Math.sin(time*11+o.phase)*.90;
-      pose(x,field.height(x,z)+.44+.16*Math.sin(time*1.86+o.phase),z,Math.atan2(-Math.sin(a),Math.cos(a)),.98);
+      pose(a.x,field.height(a.x,a.z)+.44+.16*Math.sin(time*1.86+o.phase),a.z,a.heading,.98);
       draw('butterflyL',o.color,0,0,0,1,1,1,0,0,flap);
       draw('butterflyR',o.color,0,0,0,1,1,1,0,0,-flap);
+      report('butterfly',a,a.x,a.z);
     }
     for(const bird of flock){
       const angle=time*.165+bird.a+1.8;
       const x=Math.cos(angle)*bird.r,z=Math.sin(angle)*bird.r*.79-4.55;
-      const y=bird.y+.32*Math.sin(angle*2+bird.a)+Math.max(0,field.height(x,z));
+      const base=field.height(x,z);
+      const roof=world.objects.reduce((height,o)=>items[o.type].category==='house'&&inFootprint(x,z,o,1.05)
+        ? Math.max(height,architectureHeight(items[o.type].form,o.w)+(o.type==='tower'?3:0)) : height,0);
+      const y=Math.max(bird.y+.32*Math.sin(angle*2+bird.a),roof+.45)+Math.max(0,base);
       const heading=Math.atan2(-Math.sin(angle),Math.cos(angle)*.79);
       const flap=Math.sin(time*bird.rate+bird.a*8)*.46;
       pose(x,y,z,heading,bird.s);
@@ -199,5 +209,5 @@ export function buildEcology(world,field,region) {
     matte.dispose();cloudMaterial.dispose();
   }
   step(0,world.light);
-  return {group,step,dispose};
+  return {group,step,dispose,targets};
 }

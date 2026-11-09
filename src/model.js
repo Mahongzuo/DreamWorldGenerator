@@ -147,7 +147,7 @@ export function createKit() {
   return {
     time,
     geometry: {
-      box: new T.BoxGeometry(), rock: new T.DodecahedronGeometry(1, 0),
+      box: new T.BoxGeometry(), cone: new T.ConeGeometry(1,1,8), dome: new T.SphereGeometry(1,12,6,0,Math.PI*2,0,Math.PI*.5), rock: new T.DodecahedronGeometry(1, 0),
       trunk: new T.CylinderGeometry(.61, 1, 1, 8), disc: new T.CylinderGeometry(1, 1, 1, 12),
       fir: firGeometry(), grass: grassGeometry(), flame: new T.IcosahedronGeometry(1, 0)
     },
