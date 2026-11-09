@@ -1,3 +1,4 @@
+import {traversalTypes,traversalBoxes} from './traversal-shapes.js';
 import * as T from 'three';
 import {batch,randFrom} from './model.js';
 
@@ -334,6 +335,19 @@ export function buildDecor(kit,o,def){
     for(const x of [-s*.41,s*.41])for(const z of [-s*.41,s*.41])box(c,x,s*.65,z,s*.076,s*1.30,s*.078);
     for(let i=-2;i<=2;i++)box(c,i*s*.21,s*1.32,0,s*.068,s*.083,s*1.07);
     for(let i=-2;i<=2;i++)box(a,0,s*1.39,i*s*.20,s*1.06,s*.046,s*.062);
+  }else if(traversalTypes[o.type]){
+    const spec=traversalTypes[o.type];
+    for(const tile of traversalBoxes(o)){
+      const h=tile.top-tile.bottom;
+      b.box(c,tile.x,(tile.top+tile.bottom)/2,tile.z,tile.w,h,tile.d,{surface:spec.kind==='wood'?'wood':'basic'});
+      // Coping/plank surface stays inside the shared collision envelope.
+      box(a,tile.x,tile.top-.025,tile.z,tile.w,.05,tile.d);
+      if(spec.kind==='wood')for(let x=-tile.w/2+.24;x<tile.w/2;x+=.32)box(c,x,tile.top+.001,tile.z,.012,.003,tile.d-.06);
+      else if(spec.kind==='wall'||spec.kind==='stone'){
+        for(let y=.19;y<h-.08;y+=.22)box(a,0,y,tile.z+tile.d/2+.001,tile.w,.012,.003);
+        for(let x=-tile.w/2+.35;x<tile.w/2;x+=.44)box(a,x,h/2,tile.z+tile.d/2+.002,.012,h-.08,.003);
+      }
+    }
   }else if(form==='wall'){
     for(let j=0;j<3;j++)for(let i=0;i<4;i++)b.box(i%2?a:c,(i-1.5+j*.09)*s*.27,s*(.09+j*.15),0,s*.25,s*.143,s*.31);
   }else if(form==='monolith'){

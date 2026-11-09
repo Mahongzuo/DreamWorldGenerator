@@ -27,13 +27,13 @@ export function createAdventureActors(scene,onEvent){
    scene.add(group);const a={id,...spot,r:.8,kind:'land',hp:60,maxHp:60,heading:0,windup:0,cooldown:1.4,flash:0,clock:rng()*6,group,body,head,arms,crowd:c,cell:null};c.update(a);actors.set(id,a);place(a);
   }
  }
- function place(a){a.group.position.set(a.x,nav.height(a.x,a.z),a.z);a.group.rotation.y=a.heading;}
+ function place(a){a.y=nav.height(a.x,a.z);a.h=1.8;a.group.position.set(a.x,a.y,a.z);a.group.rotation.y=a.heading;}
  function step(dt,player){
   if(!enabled||!player||!dt)return;
   for(const a of actors.values()){
    a.clock+=dt;a.cooldown=Math.max(0,a.cooldown-dt);a.flash=Math.max(0,a.flash-dt);
    const dx=player.x-a.x,dz=player.z-a.z,d=Math.hypot(dx,dz);
-   const line=nav.sweep(a.x,a.z,player.x,player.z,.2,'land');
+   const line=Math.abs((player.y??0)-a.y)<1.2&&nav.sweep(a.x,a.z,player.x,player.z,.2,'land');
    if(a.windup>0){
     a.windup-=dt;if(a.windup<=0){a.cooldown=1.7;if(d<1.55&&line)onEvent({type:'hurt',damage:14});}
    }else if(d<1.45&&line&&a.cooldown===0){a.windup=.75;}
@@ -48,7 +48,7 @@ export function createAdventureActors(scene,onEvent){
   }
  }
  function attack(player,power){
-  const targets=[...actors.values()].map(a=>({a,d:Math.hypot(a.x-player.x,a.z-player.z)})).filter(({a,d})=>d<2.6&&nav.sweep(player.x,player.z,a.x,a.z,.2,'land')).sort((a,b)=>a.d-b.d);
+  const targets=[...actors.values()].map(a=>({a,d:Math.hypot(a.x-player.x,a.z-player.z)})).filter(({a,d})=>d<2.6&&Math.abs((player.y??0)-a.y)<1.2&&nav.sweep(player.x,player.z,a.x,a.z,.2,'land')).sort((a,b)=>a.d-b.d);
   const a=targets[0]?.a;if(!a)return null;
   a.hp-=power;a.flash=.3;a.windup=0;a.cooldown=.65;
   player.a=Math.atan2(a.x-player.x,a.z-player.z);

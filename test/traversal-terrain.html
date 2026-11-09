@@ -1,0 +1,15 @@
+<!doctype html><meta charset="utf-8"><title>真实地形身法回归</title><pre id="result">正在运行…</pre><script type="module">
+import {preset} from '../src/sandbox-state.js';import {makeField} from '../src/sandbox-model.js';import {createNavigation} from '../src/navigation.js';import {createCharacter,stepCharacter,requestJump} from '../src/character-controller.js';import {bodyClear} from '../src/traversal-motion.js';
+const results=[],start=performance.now();let steps=0;
+try{
+ for(const fps of [30,60,120])for(const [type,z,a,expected] of [['garden-low-wall',4.65,0,'vault'],['stone-terrace',3.45,0,'climb'],['garden-stairs',3.45,Math.PI,'stairs']]){
+  const world=preset('blank');world.seed='TRAVERSE';world.objects=[{id:1,type,x:.1,z,w:type==='garden-low-wall'?2.8:3,d:type==='garden-low-wall'?.45:3,a}];world.strokes=[];
+  const field=makeField(world),nav=createNavigation(world,field,null,[],[]),p=createCharacter(.1,5.45,nav.support(.1,5.45),Math.PI),states=new Set();if(expected!=='stairs')requestJump(p);
+  for(let i=0;i<fps*1.5;i++){stepCharacter(p,{yaw:Math.PI,forward:expected==='stairs'?1:0,walk:true},1/fps,nav);states.add(p.state);steps++;if(!bodyClear(nav,null,null,p))throw Error(type+' penetration '+JSON.stringify(p));}
+  if(expected==='stairs'?p.y<.7:!states.has(expected))throw Error(type+' did not traverse');
+  results.push(`PASS ${fps} FPS · ${type} · states ${[...states].join(' / ')}`);
+ }
+ results.push(`PASS ${steps} physics frames in ${(performance.now()-start).toFixed(1)} ms (includes terrain construction; desktop CPU only)`);
+}catch(e){results.push('FAIL '+e.message);}
+document.querySelector('#result').textContent=results.join('\n');
+</script>

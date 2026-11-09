@@ -1,3 +1,4 @@
+import {isTraversable} from './traversal-shapes.js';
 import {normalizeGame} from './gameplay.js';
 import {sceneDesigns} from './scene-designs.js';
 import {modelDefinitions} from './asset-registry.js';
@@ -52,7 +53,7 @@ export const items = Object.fromEntries(Object.entries(catalog).flatMap(([catego
 export const waterAnimal=o=>['duck','goose','swan','fish'].includes(items[o.type]?.form);
 export const flyingAnimal=o=>['owl','swallow','kingfisher','butterfly','dragonfly','bee'].includes(items[o.type]?.form);
 export const isTree=id=>items[id]?.category==='plant'&&['针叶树','阔叶树'].includes(items[id].family);
-export const isSolid=o=>modelDefinitions[o.type]?.collision===true||items[o.type]?.category==='house'||['rock','stone-wall','standing-stone','well','pack-basalt','pack-karst'].includes(o.type);
+export const isSolid=o=>isTraversable(o.type)||modelDefinitions[o.type]?.collision===true||items[o.type]?.category==='house'||['rock','stone-wall','standing-stone','well','pack-basalt','pack-karst'].includes(o.type);
 
 export const themes = {
   pine: {label:'松溪谷', description:'雪松木屋与清蓝溪流', colors:['#8b9a59','#a7ae72','#5e8157','#77844e'], sky:'#d5e3ce', growth:'pine'},

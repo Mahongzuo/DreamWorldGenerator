@@ -106,16 +106,18 @@ export function buildAvatar(kit){
   p(body,'disc','#c5ad79',0,1.09,-.245,.105,.38,.105,0,Math.PI/2);
   for(const x of [-.162,.162])p(body,'box','#77927a',x,.94,-.113,.045,.41,.145);
   body.finish(visual);
-  const arms=[],legs=[],knees=[];
+  const arms=[],forearms=[],legs=[],knees=[],feet=[];
   for(const s of [-1,1]){
     const arm=new T.Group(), leg=new T.Group(), a=batch(kit),b=batch(kit);
     arm.position.set(s*.264,1.078,0);
-    leg.position.set(s*.125,.676,0);
-    p(a,'rock',jacket,0,-.163,0,.083,.19,.075);
-    p(a,'rock',skin,0,-.356,.015,.067,.070,.063);
+    leg.position.set(s*.125,.62,0);
+    p(a,'rock',jacket,0,-.10,0,.083,.12,.075);
+    const forearm=new T.Group(),fore=batch(kit);forearm.position.y=-.21;
+    p(fore,'rock',jacket,0,-.052,0,.073,.075,.068);p(fore,'rock',skin,0,-.146,.015,.067,.070,.063);fore.finish(forearm);arm.add(forearm);forearms.push(forearm);
     p(b,'rock',pants,0,-.14,0,.101,.145,.106);
     const knee=new T.Group(),lower=batch(kit);knee.position.y=-.285;
-    p(lower,'rock',pants,0,-.105,0,.090,.12,.094);p(lower,'rock',boots,0,-.224,.062,.108,.112,.171);
+    p(lower,'rock',pants,0,-.105,0,.090,.12,.094);
+    const foot=new T.Group(),shoe=batch(kit);foot.position.set(0,-.224,.062);p(shoe,'rock',boots,0,0,0,.108,.112,.171);shoe.finish(foot);knee.add(foot);feet.push(foot);
     lower.finish(knee);leg.add(knee);knees.push(knee);
     a.finish(arm);b.finish(leg);visual.add(arm,leg);arms.push(arm);legs.push(leg);
   }
@@ -123,8 +125,8 @@ export function buildAvatar(kit){
   p(tool,'box','#a27854',0,-.18,.035,.051,.52,.051,0,-.21);
   p(tool,'box','#869590',.062,-.40,.035,.192,.108,.057,0,-.17);
   tool.finish(axe);
-  axe.position.set(.012,-.36,.035);
-  axe.visible=false;arms[1].add(axe);
+  axe.position.set(.012,-.15,.035);
+  axe.visible=false;forearms[1].add(axe);
   const shadow=new T.Mesh(new T.CircleGeometry(.34,20).rotateX(-Math.PI/2),
     new T.MeshBasicMaterial({color:'#3e4f3b',transparent:true,opacity:.22,depthWrite:false}));
   shadow.position.y=.022;
@@ -133,25 +135,52 @@ export function buildAvatar(kit){
   p(blade,'box','#cbd1bd',0,-.62,.035,.09,.74,.04);
   p(blade,'box','#98835c',0,-.29,.035,.28,.05,.07);
   p(blade,'box','#745a3f',0,-.18,.035,.06,.18,.06);
-  blade.finish(sword);sword.position.copy(axe.position);sword.visible=false;arms[1].add(sword);
-  let gait=0,air=0,landBlend=0;
+  blade.finish(sword);sword.position.copy(axe.position);sword.visible=false;forearms[1].add(sword);
+  let gait=0,air=0,landBlend=0,traverseBlend=0;
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  function limb(y,z,l1,l2){
+    const d=clamp(Math.hypot(y,z),Math.abs(l1-l2)+.001,l1+l2-.001);
+    return {upper:Math.atan2(-z,-y)-Math.acos(clamp((l1*l1+d*d-l2*l2)/(2*l1*d),-1,1)),lower:Math.PI-Math.acos(clamp((l1*l1+l2*l2-d*d)/(2*l1*l2),-1,1))};
+  }
   function pose(t,moving,swing,weapon='axe',motion=null,dt=1/60){
-    const speed=motion?.speed??(moving?2.7:0),fast=Math.min(1,speed/5.6),factor=1-Math.exp(-dt*18);
+    const speed=motion?.speed??(moving?2.7:0),fast=Math.min(1,speed/5.6),factor=1-Math.exp(-dt*20),action=motion?.traversal;
     gait+=(Math.min(1,speed/1.5)-gait)*factor;
     air+=((motion&&!motion.grounded?1:0)-air)*factor;
-    landBlend+=((motion?.state==='land'?1:0)-landBlend)*(1-Math.exp(-dt*25));
-    const phase=(motion?.travel??t*2.7)*Math.PI*2/1.75;
-    const wave=Math.sin(phase)*(.42+fast*.30)*gait*(1-air);
-    legs[0].rotation.x=wave-air*.36;legs[1].rotation.x=-wave+air*.18;
-    knees[0].rotation.x=Math.max(0,-Math.sin(phase))*.72*gait+air*.7+landBlend*.35;
-    knees[1].rotation.x=Math.max(0,Math.sin(phase))*.72*gait+air*.55+landBlend*.35;
-    arms[0].rotation.x=-wave*.8-air*.55;
-    arms[1].rotation.x=swing>0?-1.5*Math.sin(swing*Math.PI):wave*.8-air*.55;
-    arms[0].rotation.z=-air*.26;arms[1].rotation.z=swing>0?.23:air*.26;
-    visual.position.y=Math.abs(Math.sin(phase))*.045*gait*(1-air)-landBlend*.10;
-    visual.rotation.x=-(motion?.lean??0)-fast*.07*gait+landBlend*.12;
-    visual.rotation.z=-(motion?.turn??0)*.009*gait;
-    axe.visible=swing>0&&weapon!=='sword';sword.visible=swing>0&&weapon==='sword';
+    const landing=motion?.landTime>0?Math.min(1,(motion.landingImpact??3)/9):0;
+    landBlend+=(landing-landBlend)*(1-Math.exp(-dt*24));
+    traverseBlend+=((action?1:0)-traverseBlend)*(1-Math.exp(-dt*25));
+    const phase=motion?.phase??t*9.6,progress=action?.progress??0;
+    const push=action?Math.sin(progress*Math.PI):traverseBlend;
+    const bodyDip=-(.055+fast*.025)*gait-landBlend*.10+Math.min(0,...(motion?.footHeights??[0]))*.3*(1-air);
+    visual.position.y+=(bodyDip-visual.position.y)*factor;
+    visual.rotation.x+=(-(motion?.lean??0)-fast*.10*gait+landBlend*.18-push*.28-visual.rotation.x)*factor;
+    visual.rotation.z+=(-(motion?.turn??0)*.009*gait-visual.rotation.z)*factor;
+    visual.rotation.y+=(-(motion?.turn??0)*.012-visual.rotation.y)*factor;
+    for(let i=0;i<2;i++){
+      const cycle=((phase+i*Math.PI)%(Math.PI*2)+Math.PI*2)%(Math.PI*2)/(Math.PI*2),stance=cycle<.60;
+      const step=stance?cycle/.60:(cycle-.60)/.40;
+      const reach=(.13+fast*.13)*gait,footZ=(stance?1-2*step:-Math.cos(step*Math.PI))*reach;
+      const lift=stance?0:Math.sin(step*Math.PI)*(.09+fast*.10)*gait;
+      const ground=motion?.footHeights?.[i]??0;
+      const target=limb(.113+ground*(1-air)+lift-.62-visual.position.y,footZ,.285,.224);
+      const tuck=action?(action.kind==='vault'?(i===0?-.9:-.45):i===0?-.70:.12):(i===0?-.40:.20);
+      const hip=target.upper*(1-air)+tuck*air,knee=target.lower*(1-air)+(action?1.45:.78)*air;
+      legs[i].rotation.x+=(hip-legs[i].rotation.x)*factor;knees[i].rotation.x+=(knee-knees[i].rotation.x)*factor;
+      feet[i].rotation.x+=(-(legs[i].rotation.x+knees[i].rotation.x)*(1-air)+air*.15-feet[i].rotation.x)*factor;
+      let arm=Math.sin(phase+i*Math.PI)*(.28+fast*.28)*gait,elbow=-.18-fast*.48*gait;
+      if(action){
+        const hand=action.hand,dx=hand.x-motion.x,dz=hand.z-motion.z;
+        const forward=Math.sin(motion.a)*dx+Math.cos(motion.a)*dz;
+        const targetArm=limb(hand.y-motion.y-1.078-visual.position.y,forward,.21,.15);
+        const hold=Math.min(1,Math.max(0,(.84-progress)/.18));
+        arm=arm*(1-hold)+targetArm.upper*hold;elbow=elbow*(1-hold)+targetArm.lower*hold;
+      }else if(air>.1)arm-=air*.55;
+      if(i===1&&swing>0){arm=-1.5*Math.sin(swing*Math.PI);elbow=-.3;}
+      arms[i].rotation.x+=(arm-arms[i].rotation.x)*factor;
+      forearms[i].rotation.x+=(elbow-forearms[i].rotation.x)*factor;
+      arms[i].rotation.z+=((i?1:-1)*air*.12-arms[i].rotation.z)*factor;
+    }
+    axe.visible=swing>0&&weapon!=='sword'&&!action;sword.visible=swing>0&&weapon==='sword'&&!action;
     shadow.visible=air<.08;
   }
   return {group:root,pose};

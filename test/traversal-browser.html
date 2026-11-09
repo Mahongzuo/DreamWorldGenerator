@@ -1,0 +1,7 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>身法场景回归</title><style>body{font:16px system-ui;padding:24px;background:#f4f5ec;color:#36533e}a{display:block;margin:16px 0;padding:15px;border:1px solid #b5c8ad;border-radius:9px;max-width:440px;color:#36533e}</style><h1>真实应用 · 身法回归场景</h1><p>使用普通可编辑预设，无特殊角色控制入口。</p><div id="links"></div><script type="module">
+import {preset,items} from '../src/sandbox-state.js';
+for(const [label,type,z,a] of [['翻越矮墙','garden-low-wall',4.65,0],['攀上高台','stone-terrace',3.45,0],['步行上下台阶','garden-stairs',3.45,Math.PI],['旧干砌矮墙','stone-wall',4.65,0]]){
+ const world=preset('blank');world.seed='TRAVERSE';world.objects=[{id:1,type,x:.1,z,w:items[type].width,d:items[type].depth,a}];world.strokes=[];
+ const link=document.createElement('a');link.textContent=label;link.href='/?world='+btoa(JSON.stringify(world)).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'');document.querySelector('#links').append(link);
+}
+</script></html>

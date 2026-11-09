@@ -419,15 +419,15 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     if(player&&playing){
       player.tile=currentTile();
       const nav=land.userData.navigation;
-      if(landChange&&nav.contact(player.x,player.z,CHARACTER.radius)){
+      if(landChange&&nav.bodyContact(player.x,player.y,player.z,CHARACTER.radius)){
         const available=(x,z)=>crowd.fits(x,z,CHARACTER.radius,'land',playerBody);
         const safe=nav.find(player.x,player.z,CHARACTER.radius,'land',8,available);
-        if(safe){player.x=safe.x;player.z=safe.z;player.y=nav.support(safe.x,safe.z);player.vy=0;player.grounded=true;stopCharacter(player);}
+        if(safe){player.x=safe.x;player.z=safe.z;player.y=nav.support(safe.x,safe.z);player.vy=0;player.grounded=true;player.traversal=null;stopCharacter(player);}
       }
       syncPlayerBody();
     }else if(player){
       avatar.group.visible=player.tile===currentTile();
-      if(avatar.group.visible)avatar.group.position.y=land.userData.navigation.height(player.x,player.z);
+      if(avatar.group.visible)avatar.group.position.y=land.userData.navigation.support(player.x,player.z,CHARACTER.radius,player.y+.32);
     }
     if(playing)adventure.sync(next,land.userData.navigation,crowd,player);
     updateAnimalDetail();schedule();
@@ -468,6 +468,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     const y=a.kind==='water'?field.level+.037+Math.sin(t*2.8+a.seed)*.021:
       a.kind==='fly'?field.height(a.x,a.z)+hover+Math.sin(t*3+a.seed)*.18:
       nav.height(a.x,a.z)+(deerPose||group.userData.packModel?0:Math.abs(Math.sin(a.travel*17))*.026*gait);
+    a.y=y;a.h=modelHeight(o)??Math.max(.35,o.w*1.2);
     group.position.set(a.x,y,a.z);
     group.rotation.set(0,a.heading,a.kind==='fly'?Math.sin(t*3+a.seed)*.19:0);
     deerPose?.(a,hoofGround(nav,a,y,o.w/.8));
@@ -516,9 +517,9 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     if(!land)return false;
     const nav=land.userData.navigation;
     const reuse=x===undefined&&player?.tile===currentTile();
-    const safe=nav.find(x??(reuse?player.x:(region?.x??0)*30+.10),z??(reuse?player.z:(region?.z??0)*22.8+5.45),CHARACTER.radius,'land',4.5,(xx,zz)=>crowd.fits(xx,zz,CHARACTER.radius,'land',playerBody));
+    const safe=reuse&&!nav.bodyContact(player.x,player.y,player.z,CHARACTER.radius)?{x:player.x,z:player.z}:nav.find(x??(reuse?player.x:(region?.x??0)*30+.10),z??(reuse?player.z:(region?.z??0)*22.8+5.45),CHARACTER.radius,'land',4.5,(xx,zz)=>crowd.fits(xx,zz,CHARACTER.radius,'land',playerBody));
     if(!safe)return false;
-    player={...createCharacter(safe.x,safe.z,nav.support(safe.x,safe.z),reuse?player.a:Math.PI),tile:currentTile()};
+    player={...createCharacter(safe.x,safe.z,nav.support(safe.x,safe.z,CHARACTER.radius,reuse?player.y+.32:Infinity),reuse?player.a:Math.PI),tile:currentTile()};
     yaw=cameraYaw=player.a;pitch=cameraPitch=.30;zoom=arm=4.3;lastMotion='';playing=true;clearMovement();syncPlayerBody();
     cameraAnchor.set(player.x,player.y+1.12,player.z);
     adventure.sync(world,nav,crowd,player);
@@ -544,7 +545,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
   }
   function syncPlayerBody(){
     if(!playerBody)playerBody={x:player.x,z:player.z,r:CHARACTER.radius,kind:'land'};
-    playerBody.x=player.x;playerBody.z=player.z;crowd.update(playerBody);
+    playerBody.x=player.x;playerBody.z=player.z;playerBody.y=player.y;playerBody.h=CHARACTER.height;crowd.update(playerBody);
   }
   function clearMovement(){movement.clear();analog={side:0,forward:0};runLatch=false;stopCharacter(player);onGame({type:'controls-reset'});}
   function walk(dt){
@@ -564,8 +565,9 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     player.swing=Math.max(0,player.swing-dt*2.2);
     avatar.group.position.set(player.x,player.y,player.z);
     avatar.group.rotation.y=player.a;
-    avatar.pose(player.t,player.speed>.07,player.swing,player.weapon,player,dt);
     const nav=land.userData.navigation;
+    player.footHeights=[-1,1].map(side=>{const x=player.x+Math.cos(player.a)*side*.125,z=player.z-Math.sin(player.a)*side*.125;return T.MathUtils.clamp(nav.support(x,z,.04,player.y+.32)-player.y,-.22,.27);});
+    avatar.pose(player.t,player.speed>.07,player.swing,player.weapon,player,dt);
     const blend=dt?1-Math.exp(-dt*22):1;
     cameraYaw+=Math.atan2(Math.sin(yaw-cameraYaw),Math.cos(yaw-cameraYaw))*blend;
     cameraPitch+=(pitch-cameraPitch)*blend;
@@ -579,7 +581,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     lookGoal.copy(cameraAnchor);follow.lookAt(lookGoal);
     const fov=58+Math.min(1,player.speed/CHARACTER.sprint)*5;
     follow.fov+=(fov-follow.fov)*(dt?1-Math.exp(-dt*6):1);follow.updateProjectionMatrix();
-    const stateText={idle:'站立',start:'起步',walk:'慢走',jog:'慢跑',sprint:'冲刺',pivot:'转身',stop:'停步',jump:'起跳',fall:'下落',land:'落地'}[player.state];
+    const stateText={idle:'站立',start:'起步',walk:'慢走',jog:'慢跑',sprint:'冲刺',pivot:'转身',stop:'停步',jump:'起跳',fall:'下落',land:'落地','land-heavy':'缓冲落地',vault:'撑墙翻越',climb:'攀上平台'}[player.state];
     const motionText=stateText+' · '+player.speed.toFixed(1)+' m/s';
     if(motionText!==lastMotion){lastMotion=motionText;onGame({type:'locomotion',text:motionText,state:player.state});}
     const observe=nearest(),tree=nearest(true);
@@ -587,7 +589,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     if(signature!==nearKey){nearKey=signature;onNearby({observe,tree});}
   }
   function nearest(chop=false){
-    if(!playing||!player||!land)return null;
+    if(!playing||!player||!land||player.traversal)return null;
     const close=(x,z)=>Math.hypot(x-player.x,z-player.z);
     const trees=land.userData.navigation.trees;
     if(chop){
@@ -636,7 +638,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
   }
   function chop(){
     const tree=nearest(true);
-    if(!tree||player.swing>.27||(world.game?.mode==='adventure'&&world.game.health<=0))return null;
+    if(!tree||player.traversal||player.swing>.27||(world.game?.mode==='adventure'&&world.game.health<=0))return null;
     player.swing=1;player.weapon='axe';
     player.a=Math.atan2(tree.x-player.x,tree.z-player.z);
     schedule();
@@ -645,7 +647,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
 
 
   function strikeTarget(){
-    if(!playing||!player||(world.game?.mode==='adventure'&&world.game.health<=0)||player.swing>.27)return null;
+    if(!playing||!player||player.traversal||(world.game?.mode==='adventure'&&world.game.health<=0)||player.swing>.27)return null;
     const candidates=[];
     for(const o of world.objects){
       if(items[o.type].category==='animal')continue;
@@ -666,7 +668,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     return {kind:'ground',x,z};
   }
   function attack(){
-    if(!playing||!player||world.game?.mode!=='adventure'||world.game.health<=0||player.swing>.27)return null;
+    if(!playing||!player||player.traversal||world.game?.mode!=='adventure'||world.game.health<=0||player.swing>.27)return null;
     player.swing=1;player.weapon=world.game.sword?'sword':'axe';const result=adventure.attack(player,world.game.sword?30:15);schedule();return result;
   }
 

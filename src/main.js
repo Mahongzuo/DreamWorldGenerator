@@ -1,3 +1,4 @@
+import {isTraversable,traversalTypes} from './traversal-shapes.js';
 import {normalizeGame,buildingCost,spend,craft,recipes,costText,rewardDefeat,visit,hurt,respawn,gather,quest} from './gameplay.js';
 import {sceneDesigns,appendScene} from './scene-presets.js';
 import {connectScene} from './scene-connections.js';
@@ -53,6 +54,10 @@ function thumbnail(o){
   if(preview)return `<img src="${preview}" alt="${o.name}" loading="lazy" decoding="async">`;
   const ground='<ellipse cx="50" cy="38" rx="35" ry="7" fill="#829465" opacity=".22"/>';
   const {color:c,accent:a,form}=o;
+  if(traversalTypes[o.id]){
+    const stairs=o.id==='garden-stairs',wall=o.id==='garden-low-wall';
+    return svg(ground+`<path fill="${c}" d="${stairs?'M20 36V30h12v-7h12v-7h12V9h23v27Z':wall?'M20 35V18l53-8v24Z':'M21 34V20l27-12 32 10v17L51 43Z'}"/><path fill="${a}" d="${stairs?'m20 30 12-3v-4l12-3v-4l12-3V9l23 4-23 6-12 7-12 7-12 3Z':wall?'m20 18 53-8 7 5-54 8Z':'m21 20 27-12 32 10-29 14Z'}"/>`);
+  }
   if(o.category==='animal'){
     if(['fish','duck','goose','swan','heron'].includes(form))return svg(ground+`<path fill="${c}" d="M26 31q6-9 24-8 10 1 14 6l9-5-1 12-10-4q-17 10-36-1Z"/><path fill="${a}" d="M50 24q5-4 8-12 5-5 11 1l-5 3-4 12Z"/><circle cx="63" cy="13" r="1" fill="#3d4c40"/>`);
     if(['owl','swallow','kingfisher','butterfly','bee','dragonfly'].includes(form))return svg(ground+`<path fill="${c}" d="M50 22Q34 8 22 11q1 14 24 21l4 5 4-5q23-7 24-21-12-3-28 11Z"/><path fill="${a}" d="M27 15q6-2 18 10-10 0-18-10Zm46 0q-6-2-18 10 10 0 18-10Z"/>`);
@@ -226,8 +231,8 @@ document.querySelector('#app').innerHTML=`
         <div class="walker-hud" id="walker-hud" hidden>
           <article class="walk-note" id="walk-note" hidden><strong></strong><p></p></article>
           <div class="walk-info"><strong>探访者</strong><span id="locomotion" aria-live="off">站立 · 0.0 m/s</span><span id="nearby">靠近动物、树木或建筑</span></div>
-          <div class="locomotion-actions"><button type="button" class="btn" id="jump">跳跃 <kbd>Space</kbd></button><button type="button" class="btn" id="sprint" aria-pressed="false">冲刺 <kbd>Shift</kbd></button><button type="button" class="btn" id="recenter-camera">镜头回正 <kbd>Q</kbd></button></div>
-          <small class="walk-help">WASD 移动 · C 慢走 · 拖动看向 · 滚轮调距离</small>
+          <div class="locomotion-actions"><button type="button" class="btn" id="jump">跳 / 翻越 <kbd>Space</kbd></button><button type="button" class="btn" id="sprint" aria-pressed="false">冲刺 <kbd>Shift</kbd></button><button type="button" class="btn" id="recenter-camera">镜头回正 <kbd>Q</kbd></button></div>
+          <small class="walk-help">WASD 移动 · 贴近矮墙 / 台沿按 Space 翻越 · C 慢走</small>
           <div class="walk-actions">
             <button type="button" class="btn" id="observe">${icon('book',16)} 观察 <kbd>E</kbd></button>
             <button type="button" class="btn" id="chop">${icon('axe',16)} 伐木 <kbd>F</kbd></button>
@@ -306,7 +311,7 @@ function announce(text){
 const selectedObject=()=>world.objects.find(o=>o.id===selected);
 function toolTip(){
   if(mode==='spawn')return '点击地面放置角色，或从预设步道出发。';
-  if(mode==='walk')return 'WASD 移动 · Shift 冲刺 · Space 跳跃 · C 慢走 · 拖动看向 · Q 镜头回正 · E 观察 · F 伐木 · G 采矿拆除 · J 攻击 · Esc 返回建造。';
+  if(mode==='walk')return 'WASD 移动 · Shift 冲刺 · Space 跳跃 / 翻越 / 攀上 · C 慢走 · 拖动看向 · Q 镜头回正 · E 观察 · F 伐木 · G 采矿拆除 · J 攻击 · Esc 返回建造。';
   if(mode!=='build') {
     if(mode==='camera'&&open)return matchMedia('(pointer: coarse)').matches?'拖动前往相邻领地，双指旋转或缩放。':'拖动或右键平移，滚轮缩放；中键拖动旋转。';
     return help[mode];
@@ -504,10 +509,10 @@ function renderInspector(){
     return;
   }
   if(mode==='select'&&o){
-    const house=items[o.type].category==='house';
+    const house=items[o.type].category==='house',traversable=isTraversable(o.type);
     const original=['cedar','alpine','shed'].includes(o.type);
     inspector.innerHTML=`<div class="inspector-head"><strong>${items[o.type].name}</strong><span>已选中</span></div>
-      <div class="ranges">${house ? objectRange('w',o.w,2.4,8,'面宽','m')+objectRange('d',o.d,2.2,7,'进深','m') : objectRange('w',o.w,.35,3,'大小','m')}</div>
+      <div class="ranges">${house ? objectRange('w',o.w,2.4,8,'面宽','m')+objectRange('d',o.d,2.2,7,'进深','m') : traversable?objectRange('w',o.w,.6,3,'宽度','m')+objectRange('d',o.d,.35,3,'进深','m'):objectRange('w',o.w,.35,3,'大小','m')}</div>
       ${original?`<div class="object-options"><select data-material aria-label="木材"><option value="cedar">暖雪松</option><option value="dark">炭化木</option><option value="pale">浅白橡</option></select><button class="chip" type="button" data-module="deck" aria-pressed="${o.deck!==false}">前廊</button><button class="chip" type="button" data-module="chimney" aria-pressed="${o.chimney!==false}">烟囱</button></div>`:''}
       <div class="object-actions"><button class="btn" id="rotate" type="button">${icon('reset',14)} 旋转 45°</button><button class="btn delete" id="delete" type="button">${icon('trash',14)} 删除</button></div>`;
     if(original) inspector.querySelector('[data-material]').value=o.wood??'cedar';
@@ -916,7 +921,7 @@ inspector.addEventListener('input',e=>{
   const o=selectedObject();
   if(o&&viewport){
     const next={...o,[key]:value};
-    if(!isHouse(o))next.d=value;
+    if(!isHouse(o)&&!isTraversable(o.type))next.d=value;
     viewport.showObject(next,o.id,validObject(next));
   }
 });
@@ -926,7 +931,7 @@ inspector.addEventListener('change',e=>{
   const key=e.target.dataset.size;
   if(key&&key!=='brush'){
     const value=e.target.valueAsNumber,next={...o,[key]:value};
-    if(!isHouse(o))next.d=value;
+    if(!isHouse(o)&&!isTraversable(o.type))next.d=value;
     updateObject(next);
     renderInspector();
   }else if(e.target.matches('[data-material]'))updateObject({...o,wood:e.target.value});

@@ -1,3 +1,4 @@
+import {isTraversable,worldTraversalBoxes,traversalAnchor} from './traversal-shapes.js';
 import {modelDefinitions,modelHeight,collisionParts} from './asset-registry.js';
 import {inside,inFootprint,isSolid,isTree,items,tileInside} from './sandbox-state.js';
 import {bridgeRise,architectureHeight} from './asset-models.js';
@@ -18,6 +19,7 @@ export function createNavigation(world,field,region,trees,bridges){
       }
   };
   for(const o of obstacles)if(isSolid(o)&&items[o.type].form!=='bridge'){
+    if(isTraversable(o.type)){for(const part of worldTraversalBoxes(o,traversalAnchor(field,o)))add(grid,{object:part,margin:0,surface:true,top:part.top,bottom:part.bottom,sourceId:o.id},part.x,part.z,Math.hypot(part.w,part.d)*.5);continue;}
     const margin=items[o.type].category==='house'?.18:0;
     for(const part of collisionParts(o))add(grid,{object:part,margin},part.x,part.z,Math.hypot(part.w,part.d)*.5+margin);
   }
@@ -41,9 +43,9 @@ export function createNavigation(world,field,region,trees,bridges){
     if(d){nx/=d;nz/=d;}else if(hx-Math.abs(lx)<hz-Math.abs(lz)){nx=Math.sign(lx)||1;nz=0;depth=r+hx-Math.abs(lx);}else{nx=0;nz=Math.sign(lz)||1;depth=r+hz-Math.abs(lz);}
     return depth>0?{x:c*nx+s*nz,z:-s*nx+c*nz,depth}:null;
   }
-  function contact(x,z,r=.30){
+  function contact(x,z,r=.30,y=-Infinity,height=1.65){
     let deepest=null;
-    for(const entry of nearby(x,z,r)){const hit=shapeContact(entry,x,z,r);if(hit&&(!deepest||hit.depth>deepest.depth))deepest=hit;}
+    for(const entry of nearby(x,z,r)){if(entry.surface&&Number.isFinite(y)&&(y>=entry.top-.012||y+height<=entry.bottom+.01))continue;const hit=shapeContact(entry,x,z,r);if(hit&&(!deepest||hit.depth>deepest.depth))deepest=hit;}
     if(deepest)return deepest;
     const allowed=(a,b)=>terrainBounds(a,b,r+.03)&&(deck(a,b,r)!==null||[[0,0],[-r,0],[r,0],[0,-r],[0,r]].every(([dx,dz])=>field.depth(a+dx,b+dz)<=.42));
     if(allowed(x,z))return null;
@@ -52,11 +54,20 @@ export function createNavigation(world,field,region,trees,bridges){
     for(let i=0;i<16;i++){const a=i*Math.PI/8,dx=Math.cos(a),dz=Math.sin(a);if(allowed(x+dx*.15,z+dz*.15)){nx+=dx;nz+=dz;}}
     const length=Math.hypot(nx,nz);return length?{x:nx/length,z:nz/length,depth:.01}:{x:0,z:0,depth:.01};
   }
+  function support(x,z,r=.30,ceiling=Infinity){
+    let floor=deck(x,z,r)??field.height(x,z);
+    for(const entry of nearby(x,z,r))if(entry.surface&&entry.top<=ceiling+.015&&entry.top>floor&&shapeContact(entry,x,z,r))floor=entry.top;
+    return floor;
+  }
+  const sourceObjects=new Map(world.objects.filter(o=>isTraversable(o.type)).map(o=>[o.id,o]));
+  function sourceToken(id){const o=sourceObjects.get(id);return o?[o.type,o.x,o.z,o.w,o.d,o.a,traversalAnchor(field,o)].join('/'):null;}
+  function surfaceAt(x,z,r=.30,top=Infinity){return [...nearby(x,z,r)].filter(e=>e.surface&&Math.abs(e.top-top)<.04&&inFootprint(x,z,e.object,-r));}
   function cameraBlocked(x,y,z,r=.18){
     if(y-r<(deck(x,z,r)??field.height(x,z)))return true;
     for(const entry of nearby(x,z,r)){
       if(!shapeContact(entry,x,z,r))continue;
       const o=entry.object,t=entry.tree,base=field.height(o?.x??t.x,o?.z??t.z);
+      if(entry.surface){if(y+r>entry.bottom&&y-r<entry.top)return true;continue;}
       const height=o?(modelHeight(o)??(items[o.type].category==='house'?architectureHeight(items[o.type].form,o.w):Math.max(1,o.w))):Math.max(2,(t.crown??1)*2.7);
       if(y+r>base&&y-r<base+height)return true;
     }
@@ -111,7 +122,7 @@ export function createNavigation(world,field,region,trees,bridges){
     }
     return null;
   }
-  return {valid,sweep,find,contact,cameraBlocked,support:(x,z,r=.30)=>deck(x,z,r)??field.height(x,z),trees:allTrees,height(x,z){return deck(x,z)??field.height(x,z);}};
+  return {valid,sweep,find,contact,cameraBlocked,support,bodyContact:(x,y,z,r=.30,h=1.65)=>contact(x,z,r,y,h),surfacesNear:(x,z,r)=>[...nearby(x,z,r)].filter(e=>e.surface),surfaceAt,sourceToken,trees:allTrees,height(x,z){return deck(x,z)??field.height(x,z);}};
 }
 
 // The same index holds wildlife and placed animals. Flights and swimmers occupy separate layers.
@@ -141,6 +152,7 @@ export function createAnimalCrowd(){
       for(let j=Math.floor((Math.min(z,zz)-reach)/size);j<=Math.floor((Math.max(z,zz)+reach)/size);j++){
         for(const other of cells.get(kind+':'+i+','+j)??[]){
           if(other===ignore)continue;
+          if(Number.isFinite(ignore?.y)&&Number.isFinite(other.y)&&(ignore.y>=other.y+(other.h??1.5)||ignore.y+(ignore.h??1.5)<=other.y))continue;
           const along=length?Math.max(0,Math.min(1,((other.x-x)*dx+(other.z-z)*dz)/length)):0;
           if((other.x-x-dx*along)**2+(other.z-z-dz*along)**2<(r+other.r+.04)**2)return false;
         }
@@ -148,13 +160,14 @@ export function createAnimalCrowd(){
     }
     return true;
   }
-  function contact(x,z,r,kind,ignore){
+  function contact(x,z,r,kind,ignore,y,height=1.65){
     const reach=r+largest+.04;let best=null;
     for(let i=Math.floor((x-reach)/size);i<=Math.floor((x+reach)/size);i++)for(let j=Math.floor((z-reach)/size);j<=Math.floor((z+reach)/size);j++){
       for(const other of cells.get(kind+':'+i+','+j)??[]){
         if(other===ignore)continue;
+        if(Number.isFinite(y)&&Number.isFinite(other.y)&&(y>=other.y+(other.h??1.5)||y+height<=other.y))continue;
         const dx=x-other.x,dz=z-other.z,d=Math.hypot(dx,dz),depth=r+other.r+.04-d;
-        if(depth>0&&(!best||depth>best.depth))best={x:d?dx/d:1,z:d?dz/d:0,depth};
+        if(depth>0&&(!best||depth>best.depth))best={x:d?dx/d:1,z:d?dz/d:0,depth,top:Number.isFinite(other.y)?other.y+(other.h??1.5):null};
       }
     }
     return best;

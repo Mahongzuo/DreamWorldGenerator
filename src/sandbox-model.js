@@ -1,3 +1,4 @@
+import {traversalAnchor,isTraversable} from './traversal-shapes.js';
 import * as T from 'three';
 import {batch, buildCabin, contactShadow, randFrom} from './model.js';
 import {baseHeight, biomeOf, biomes, continentHeight, contour, footprint, inFootprint, inside, items, LAND, themes, tileInside, tileShift, waterAnimal} from './sandbox-state.js';
@@ -620,6 +621,7 @@ function tower(kit,o) {
 }
 
 export function objectHeight(field,o){
+  if(isTraversable(o.type))return traversalAnchor(field,o);
   const def=items[o.type];
   if(waterAnimal(o)||def.form==='lily'||(def.form==='bridge'&&field.depth(o.x,o.z)>.56))
     return field.level+(waterAnimal(o)?.043:0);
