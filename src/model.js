@@ -397,6 +397,7 @@ export function buildCabin(kit, state) {
 }
 
 export function disposeGroup(group) {
+  group.userData.dispose?.();
   group.traverse((object) => {
     if (object.isInstancedMesh) object.dispose();
     if (object.userData.owned) {

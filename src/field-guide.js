@@ -1,3 +1,6 @@
+import {architectureCatalog} from './architecture-pack-data.js';
+import {faunaCatalog} from './fauna-pack-data.js';
+import {natureCatalog} from './nature-pack-data.js';
 const references = {
   rustic: ['美国国家公园管理局 · 乡土建筑', 'https://home.nps.gov/subjects/architecture/parkitecture.htm'],
   earth: ['美国国家公园管理局 · 圣菲历史景观', 'https://www.nps.gov/articles/850083.htm'],
@@ -186,3 +189,8 @@ export const originalNotes={
   lantern:'石灯笼同时承担低位照明与景观标记。切换夜景可看暖光。',
   fire:'营火模型用于布置聚集点。真实林地的用火需遵守当地规定。'
 };
+
+addedCatalog.house.push(...architectureCatalog);
+addedCatalog.animal.push(...faunaCatalog);
+addedCatalog.plant.push(...natureCatalog.plant);
+addedCatalog.decor.push(...natureCatalog.decor);

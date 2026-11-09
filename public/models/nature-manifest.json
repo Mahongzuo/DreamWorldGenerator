@@ -1,0 +1,145 @@
+{
+  "generator": "Blender 4.5 original nature sculptures",
+  "assets": [
+    {
+      "id": "nature-bamboo",
+      "width": 2.8,
+      "depth": 2.8,
+      "category": "plant",
+      "triangles": 2240,
+      "meshes": 1,
+      "bytes": 213756,
+      "bounds": {
+        "width": 2.744,
+        "depth": 0.9979,
+        "height": 3.577
+      }
+    },
+    {
+      "id": "nature-bonsai",
+      "width": 2.8,
+      "depth": 2.8,
+      "category": "plant",
+      "triangles": 1552,
+      "meshes": 1,
+      "bytes": 197564,
+      "bounds": {
+        "width": 2.48,
+        "depth": 1.8919,
+        "height": 2.5753
+      }
+    },
+    {
+      "id": "nature-wisteria",
+      "width": 2.8,
+      "depth": 2.8,
+      "category": "plant",
+      "triangles": 1772,
+      "meshes": 1,
+      "bytes": 218440,
+      "bounds": {
+        "width": 2.1813,
+        "depth": 1.4807,
+        "height": 2.3971
+      }
+    },
+    {
+      "id": "nature-willow",
+      "width": 2.8,
+      "depth": 2.8,
+      "category": "plant",
+      "triangles": 2752,
+      "meshes": 1,
+      "bytes": 313552,
+      "bounds": {
+        "width": 2.4675,
+        "depth": 2.4675,
+        "height": 2.8372
+      }
+    },
+    {
+      "id": "nature-palm",
+      "width": 2.8,
+      "depth": 2.8,
+      "category": "plant",
+      "triangles": 1376,
+      "meshes": 1,
+      "bytes": 140184,
+      "bounds": {
+        "width": 2.3294,
+        "depth": 2.3379,
+        "height": 3.0701
+      }
+    },
+    {
+      "id": "nature-fern",
+      "width": 1.8,
+      "depth": 1.8,
+      "category": "plant",
+      "triangles": 1296,
+      "meshes": 1,
+      "bytes": 146656,
+      "bounds": {
+        "width": 1.6045,
+        "depth": 1.2691,
+        "height": 0.5292
+      }
+    },
+    {
+      "id": "nature-mesa",
+      "width": 2.8,
+      "depth": 2.8,
+      "category": "decor",
+      "triangles": 520,
+      "meshes": 1,
+      "bytes": 47044,
+      "bounds": {
+        "width": 2.3625,
+        "depth": 1.8213,
+        "height": 1.7395
+      }
+    },
+    {
+      "id": "nature-peak",
+      "width": 2.8,
+      "depth": 2.8,
+      "category": "decor",
+      "triangles": 132,
+      "meshes": 1,
+      "bytes": 19552,
+      "bounds": {
+        "width": 2.136,
+        "depth": 1.4539,
+        "height": 3.5231
+      }
+    },
+    {
+      "id": "nature-sea-arch",
+      "width": 2.8,
+      "depth": 2.8,
+      "category": "decor",
+      "triangles": 480,
+      "meshes": 1,
+      "bytes": 67576,
+      "bounds": {
+        "width": 2.1011,
+        "depth": 1.3042,
+        "height": 1.96
+      }
+    },
+    {
+      "id": "nature-travertine",
+      "width": 2.8,
+      "depth": 2.8,
+      "category": "decor",
+      "triangles": 1224,
+      "meshes": 1,
+      "bytes": 153352,
+      "bounds": {
+        "width": 2.3705,
+        "depth": 1.9175,
+        "height": 1.0584
+      }
+    }
+  ]
+}

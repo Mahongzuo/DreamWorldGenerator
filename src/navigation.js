@@ -1,3 +1,4 @@
+import {modelDefinitions,collisionParts} from './asset-registry.js';
 import {inside,inFootprint,isSolid,isTree,items,tileInside} from './sandbox-state.js';
 import {bridgeRise} from './asset-models.js';
 
@@ -7,7 +8,7 @@ export function createNavigation(world,field,region,trees,bridges){
   const grid=new Map(), deckGrid=new Map(), terrainBounds=region?.bounds??(region?tileInside:inside);
   const obstacles=world.objects.filter(o=>isSolid(o)||isTree(o.type));
   const crossings=obstacles.filter(o=>items[o.type].form==='bridge');
-  const allTrees=[...trees,...obstacles.filter(o=>isTree(o.type)).map(o=>({x:o.x,z:o.z,r:o.w*.10,id:o.id,type:o.type,crown:o.w*.62}))];
+  const allTrees=[...trees,...obstacles.filter(o=>isTree(o.type)).map(o=>({x:o.x,z:o.z,r:modelDefinitions[o.type]?.treeRadius?modelDefinitions[o.type].treeRadius*o.w/modelDefinitions[o.type].width:o.w*.10,id:o.id,type:o.type,crown:Math.max(o.w,o.d)*.62}))];
   const add=(target,entry,x,z,r)=>{
     for(let a=Math.floor((x-r-.75)/size);a<=Math.floor((x+r+.75)/size);a++)
       for(let b=Math.floor((z-r-.75)/size);b<=Math.floor((z+r+.75)/size);b++){
@@ -18,7 +19,7 @@ export function createNavigation(world,field,region,trees,bridges){
   };
   for(const o of obstacles)if(isSolid(o)&&items[o.type].form!=='bridge'){
     const margin=items[o.type].category==='house'?.18:0;
-    add(grid,{object:o,margin},o.x,o.z,Math.hypot(o.w,o.d)*.5+margin);
+    for(const part of collisionParts(o))add(grid,{object:part,margin},part.x,part.z,Math.hypot(part.w,part.d)*.5+margin);
   }
   for(const tree of allTrees)add(grid,{tree},tree.x,tree.z,tree.crown??tree.r);
   for(const o of crossings)add(deckGrid,{object:o},o.x,o.z,Math.hypot(o.w,o.d)*.5);
@@ -140,7 +141,7 @@ function chooseGoal(nav,a){
   const side=random(a)<.5?-1:1;
   for(const offset of [0,.45,-.45,.92,-.92,1.55,-1.55,2.35,-2.35,Math.PI]){
     const angle=center+offset*side;
-    for(const length of [1.0+random(a)*1.25,.54]){
+    for(const length of [(a.profile?.stepDistance??1.0)+random(a)*(a.profile?.stepDistance??1.25),.54]){
       const x=a.x+Math.sin(angle)*length,z=a.z+Math.cos(angle)*length;
       if(Math.hypot(x-a.homeX,z-a.homeZ)>a.radius+.35)continue;
       if(!nav.sweep(a.x,a.z,x,z,a.r,a.kind)||a.crowd&&!a.crowd.clearPath(a.x,a.z,x,z,a.r,a.kind,a))continue;
@@ -153,7 +154,7 @@ export function wander(nav,a,dt,speed){
   if(!a||dt<=0)return;
   a.clock+=dt;
   const land=a.kind==='land';
-  const turnRate=land?1.35:2.15;
+  const turnRate=a.profile?.turnRate??(land?1.35:2.15);
   a.grazing=approach(a.grazing,Number(land&&a.grazeIntent&&a.rest>.45&&a.turnTo===null),dt*1.3);
   a.gait=approach(a.gait,a.speed,dt*1.7);
   if(a.rest>0){
@@ -167,7 +168,7 @@ export function wander(nav,a,dt,speed){
   if(!a.goal){pause(a,.33,.87);return;}
   const dx=a.goal.x-a.x,dz=a.goal.z-a.z;
   const remaining=Math.hypot(dx,dz);
-  if(remaining<.085){pause(a,land ? 1.25 : .28,land?3.8:1.45,land&&random(a)<.76);return;}
+  if(remaining<.085){pause(a,a.profile?.restMin??(land?1.25:.28),a.profile?.restMax??(land?3.8:1.45),land&&random(a)<.76);return;}
   const turn=angleDiff(a.heading,Math.atan2(dx,dz));
   a.heading+=approach(0,turn,dt*turnRate);
   const facing=Math.max(0,Math.cos(turn*1.25));

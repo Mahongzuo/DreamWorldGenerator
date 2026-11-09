@@ -3,7 +3,7 @@ import {icon} from './icons.js';
 import {catalog, items, themes, preset, inside, footprint, clamp, round, loadWorld, worldLink, STORE_KEY, ATLAS_KEY, MAX_OBJECTS, MAX_STROKES, MAX_POINTS, biomeOf, biomes, normalize, tileKey, waterAnimal, wildTile} from './sandbox-state.js';
 import {createViewport} from './viewport.js';
 import {TERRITORY_KEY, joinRegions, appendRegion, normalizeTerritory, territoryEnvelope, sliceRegion, contains, regionAt} from './territory.js';
-import {preloadModelPack} from './model-pack.js';
+import {packThumbnail,preloadModelPack} from './model-pack.js';
 import {guideSources} from './field-guide.js';
 
 const views={
@@ -46,7 +46,8 @@ const help={
 };
 const svg=(inside,view='0 0 100 48')=>`<svg viewBox="${view}" aria-hidden="true">${inside}</svg>`;
 function thumbnail(o){
-  if(o.id.startsWith('pack-'))return `<img src="/models/${o.id}.png" alt="${o.name}" loading="lazy">`;
+  const preview=packThumbnail(o.id);
+  if(preview)return `<img src="${preview}" alt="${o.name}" loading="lazy" decoding="async">`;
   const ground='<ellipse cx="50" cy="38" rx="35" ry="7" fill="#829465" opacity=".22"/>';
   const {color:c,accent:a,form}=o;
   if(o.category==='animal'){
@@ -316,15 +317,15 @@ function showMode(){
   viewport?.showFootprint(mode==='select' ? selectedObject() : null,true,true);
 }
 function renderCatalog(){
-  const candidates=views[category].types.flatMap(key=>catalog[key].items.map(([id])=>items[id])).sort((a,b)=>Number(b.id.startsWith('pack-'))-Number(a.id.startsWith('pack-')));
+  const candidates=[...views[category].types.flatMap(key=>catalog[key].items.map(([id])=>items[id])),...(category==='terrain'?catalog.decor.items.filter(([id])=>id.startsWith('nature-')).map(([id])=>items[id]):[])].sort((a,b)=>Number(Boolean(packThumbnail(b.id)))-Number(Boolean(packThumbnail(a.id))));
   for(const b of byId('categories').children)b.setAttribute('aria-pressed',b.dataset.category===category);
   const families=[...new Set(candidates.map(o=>o.family))];
   const selector=byId('catalog-filter');
-  if(!families.includes(filter))filter='';
-  selector.innerHTML='<option value="">全部类型</option>'+families.map(f=>`<option value="${f}">${f}</option>`).join('');
+  if(filter!=='__models'&&!families.includes(filter))filter='';
+  selector.innerHTML='<option value="">全部类型</option><option value="__models">精细模型</option>'+families.map(f=>`<option value="${f}">${f}</option>`).join('');
   selector.value=filter;
   const query=byId('catalog-search').value.trim().toLowerCase();
-  const values=candidates.filter(o=>(!filter||o.family===filter)&&(!query||[o.name,o.detail,o.id].some(v=>v.toLowerCase().includes(query))));
+  const values=candidates.filter(o=>(!filter||(filter==='__models'?Boolean(packThumbnail(o.id)):o.family===filter))&&(!query||[o.name,o.detail,o.id].some(v=>v.toLowerCase().includes(query))));
   byId('panel-count').textContent=values.length+' / '+total;
   byId('catalog').innerHTML=values.length?values.map(o=>`
     <button type="button" class="preset-card" data-item="${o.id}" aria-pressed="${active===o.id&&mode==='build'}">
@@ -782,7 +783,7 @@ catch(error){
 }
 sync();
 viewport?.motion(motion);
-preloadModelPack(()=>viewport?.refreshModels());
+preloadModelPack(id=>viewport?.refreshModels(id));
 renderCatalog();
 
 for(const key of Object.keys(toolLabels)) byId('mode-'+key).addEventListener('click',()=>switchMode(key));

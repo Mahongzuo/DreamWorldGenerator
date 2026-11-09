@@ -1,3 +1,5 @@
+import {animalProfile} from './animal-behavior.js';
+import {modelDefinitions,modelHeight,collisionParts} from './asset-registry.js';
 import * as T from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {createKit, disposeGroup} from './model.js';
@@ -9,7 +11,7 @@ import {buildAvatar} from './creatures.js';
 import {createAnimalCrowd,makeWander,wander} from './navigation.js';
 import {createContinuousLand} from './continuous-land.js';
 import {regionAt} from './territory.js';
-import {animatePackModel} from './model-pack.js';
+import {animatePackModel,setModelDetail} from './model-pack.js';
 import {hoofGround} from './deer.js';
 
 const lighting = {
@@ -95,7 +97,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
   let yaw=Math.PI,lift=2.55;
   const movement=new Set();
   const cameraGoal=new T.Vector3(),lookGoal=new T.Vector3();
-  let crowd=createAnimalCrowd();
+  let crowd=createAnimalCrowd(),playerBody=null;
   const continuousLand=createContinuousLand(kit);
   const objects=new Map();
   const raycaster=new T.Raycaster(),ndc=new T.Vector2(),plane=new T.Plane(new T.Vector3(0,1,0),0);
@@ -167,8 +169,8 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     for(const [id,{group,object:o}] of objects){
       if(!group.visible)continue;
       const isHouse=items[o.type].category==='house';
-      const h=o.type==='tower'?7.2:isHouse?architectureHeight(items[o.type].form,o.w):
-        items[o.type].category==='plant'?o.w*3.1:o.w*1.45;
+      const h=modelHeight(o)??(o.type==='tower'?7.2:isHouse?architectureHeight(items[o.type].form,o.w):
+        items[o.type].category==='plant'?o.w*3.1:o.w*1.45);
       box.min.set(-o.w/2,-.04,-o.d/2);
       box.max.set(o.w/2,h,o.d/2+.21);
       group.updateMatrixWorld();
@@ -347,7 +349,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
       if(oldLand&&oldLand!==land)disposeGroup(oldLand);
       worldForBorder=next;updateBorder();
       ecology?.dispose();
-      crowd=createAnimalCrowd();
+      crowd=createAnimalCrowd();playerBody=null;
     }
     if(landChange||objectsChanged){
       for(const [id,entry] of objects){
@@ -408,13 +410,15 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     if(player&&playing){
       player.tile=currentTile();
       const nav=land.userData.navigation;
-      const safe=nav.find(player.x,player.z,.25,'land',2)??nav.find(0,5.45,.25,'land',8);
+      const available=(x,z)=>crowd.fits(x,z,.25,'land',playerBody);
+      const safe=nav.find(player.x,player.z,.25,'land',2,available)??nav.find(player.x,player.z,.25,'land',8,available);
       if(safe){player.x=safe.x;player.z=safe.z;}
+      syncPlayerBody();
     }else if(player){
       avatar.group.visible=player.tile===currentTile();
       if(avatar.group.visible)avatar.group.position.y=land.userData.navigation.height(player.x,player.z);
     }
-    schedule();
+    updateAnimalDetail();schedule();
   }
   function cameraMode(on){
     orbitMode=on;
@@ -427,12 +431,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
   }
   const currentTile=()=>region?.continuous?'world':region?tileKey(region.x,region.z):'diorama';
   const typeOf=o=>waterAnimal(o)?'water':flyingAnimal(o)?'fly':'land';
-  const animalRadius=o=>{
-    const form=items[o.type].form;
-    const ratio=['pack-fox','pack-red-panda'].includes(o.type)?1.25:['deer','elk'].includes(form)?.94:['swan','heron','goose','bear','horse'].includes(form)?.90:
-      ['fox','raccoon','squirrel','cow','pig','owl','swallow','kingfisher','beaver'].includes(form)?.79:.72;
-    return Math.max(.15,o.w*ratio);
-  };
+  const animalRadius=o=>animalProfile(o).radius;
 
   function bindAnimal(entry){
     const {object:o,group}=entry;
@@ -442,6 +441,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     entry.agent=makeWander(nav,previous?.x??o.x,previous?.z??o.z,animalRadius(o),typeOf(o),previous?.heading??o.a,2.0+o.w*.65,crowd);
     if(entry.agent)entry.agent.random=(Math.floor(o.id*18317+o.x*151+o.z*871)>>>0)||1;
     if(entry.agent){
+      entry.agent.profile=animalProfile(o);
       entry.agent.homeX=o.x;entry.agent.homeZ=o.z;
       group.visible=true;
       placeAnimal(entry,time);
@@ -455,33 +455,59 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     const deerPose=group.userData.deerPose;
     const y=a.kind==='water'?field.level+.037+Math.sin(t*2.8+a.seed)*.021:
       a.kind==='fly'?field.height(a.x,a.z)+hover+Math.sin(t*3+a.seed)*.18:
-      nav.height(a.x,a.z)+(deerPose?0:Math.abs(Math.sin(a.travel*17))*.026*gait);
+      nav.height(a.x,a.z)+(deerPose||group.userData.packModel?0:Math.abs(Math.sin(a.travel*17))*.026*gait);
     group.position.set(a.x,y,a.z);
     group.rotation.set(0,a.heading,a.kind==='fly'?Math.sin(t*3+a.seed)*.19:0);
     deerPose?.(a,hoofGround(nav,a,y,o.w/.8));
   }
+  let detailClock=0;
+  const screenPoint=new T.Vector3();
+  function updateAnimalDetail(){
+    const view=playing?follow:camera;
+    view.updateMatrixWorld();
+    const candidates=[];
+    for(const entry of objects.values()){
+      if(!entry.agent)continue;
+      screenPoint.copy(entry.group.position).project(view);
+      entry.onScreen=Math.abs(screenPoint.x)<1.15&&Math.abs(screenPoint.y)<1.15&&screenPoint.z>-1&&screenPoint.z<1;
+      const distance=entry.group.position.distanceTo(view.position)/(playing?1:camera.zoom);
+      entry.distance=distance;
+      if(entry.onScreen)candidates.push(entry);
+      setModelDetail(entry.group,false);
+    }
+    candidates.sort((a,b)=>a.distance-b.distance);
+    const limit=quality==='low'?10:quality==='high'?36:20;
+    candidates.slice(0,limit).forEach(entry=>setModelDetail(entry.group,true));
+  }
   function stepAnimals(dt){
     if(!dt)return;
+    detailClock-=dt;if(detailClock<=0){updateAnimalDetail();detailClock=.3;}
     const nav=land.userData.navigation;
     for(const entry of objects.values()){
       const {agent:a,object:o}=entry;
-      animatePackModel(entry.group,{delta:dt,speed:a?.speed??0,travel:a?.travel??0,time});
       if(a){
-        wander(nav,a,dt,a.kind==='fly'?.75:a.kind==='water'?.50:.52+o.w*.16);
-        placeAnimal(entry,time);
+        entry.simDebt=(entry.simDebt??0)+dt;
+        const interval=entry.onScreen?(quality==='low'?1/20:1/30):.16;
+        if(entry.simDebt>=interval){
+          const step=Math.min(.2,entry.simDebt);entry.simDebt=0;
+          const speed=entry.agent.profile?.speed??(a.kind==='fly'?.75:a.kind==='water'?.50:.52+o.w*.16);
+          wander(nav,a,step,speed);placeAnimal(entry,time);
+        }
       }
+      animatePackModel(entry.group,{delta:dt,speed:a?.speed??0,travel:a?.travel??0,time});
       for(const spinner of entry.spinners)spinner.rotation.z-=dt*spinner.userData.spin;
     }
   }
+
 
   function beginWalk(x,z){
     if(!land)return false;
     const nav=land.userData.navigation;
     const reuse=x===undefined&&player?.tile===currentTile();
-    const safe=nav.find(x??(reuse?player.x:(region?.x??0)*30+.10),z??(reuse?player.z:(region?.z??0)*22.8+5.45),.25,'land',4.5);
+    const safe=nav.find(x??(reuse?player.x:(region?.x??0)*30+.10),z??(reuse?player.z:(region?.z??0)*22.8+5.45),.25,'land',4.5,(xx,zz)=>crowd.fits(xx,zz,.25,'land',playerBody));
     if(!safe)return false;
     player={...safe,tile:currentTile(),a:reuse?player.a:Math.PI,t:0,swing:0,y:nav.height(safe.x,safe.z)};
-    yaw=player.a;lift=2.55;playing=true;
+    yaw=player.a;lift=2.55;playing=true;syncPlayerBody();
     movement.clear();
     controls.enabled=false;
     avatar.group.visible=true;
@@ -496,11 +522,15 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
   }
   function endWalk(){
     if(!playing)return;
-    playing=false;lookDrag=null;movement.clear();
+    playing=false;lookDrag=null;movement.clear();crowd.remove(playerBody);playerBody=null;
     controls.enabled=true;
     stage.classList.remove('walking');
     nearKey='';onNearby(null);
     schedule();
+  }
+  function syncPlayerBody(){
+    if(!playerBody)playerBody={x:player.x,z:player.z,r:.25,kind:'land'};
+    playerBody.x=player.x;playerBody.z=player.z;crowd.update(playerBody);
   }
   function walk(dt){
     if(!player||!land)return;
@@ -513,7 +543,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     let moved=false;
     const nav=land.userData.navigation;
     const can=(x,z)=>{
-      return nav.sweep(player.x,player.z,x,z,.25,'land');
+      return nav.sweep(player.x,player.z,x,z,.25,'land')&&crowd.clearPath(player.x,player.z,x,z,.25,'land',playerBody);
     };
     if(Math.hypot(dx,dz)>.0001){
       for(const [xx,zz] of [[dx,dz],[dx,0],[0,dz]]){
@@ -528,6 +558,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
         onRegion(x-region.x,z-region.z,true);update(world,{...region,x,z});
       }
     }
+    syncPlayerBody();
     const height=land.userData.navigation.height(player.x,player.z);
     player.y=dt?T.MathUtils.lerp(player.y,height,Math.min(1,dt*15)):height;
     player.t+=dt*(moved?(fast?1.43:1):.30);
@@ -540,7 +571,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     let distance=back;
     for(let d=.6;d<back;d+=.29){
       const gx=player.x-Math.sin(yaw)*d,gz=player.z-Math.cos(yaw)*d;
-      if(world.objects.some(o=>items[o.type].category==='house'&&items[o.type].form!=='bridge'&&inFootprint(gx,gz,o,.17))){
+      if(world.objects.some(o=>items[o.type].category==='house'&&items[o.type].form!=='bridge'&&collisionParts(o).some(part=>inFootprint(gx,gz,part,.17)))){
         distance=Math.max(.72,d-.31);break;
       }
     }
@@ -643,10 +674,16 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
       camera.position.x+=dx;camera.position.z+=dz;controls.target.x=sx;controls.target.z=sz;
       controls.update();update(world,{...region,x,z});
     },
-    refreshModels(){
+    refreshModels(type){
       if(!world)return;
-      for(const [id,entry] of objects)if(entry.object.type.startsWith('pack-')){entry.agent?.crowd?.remove(entry.agent);disposeGroup(entry.group);objects.delete(id);}
-      update({...world,objects:[...world.objects]},region);
+      for(const entry of objects.values())if(entry.object.type===type){
+        const {object:o,agent:a}=entry;disposeGroup(entry.group);
+        entry.group=buildObject(kit,o,world,land.userData.field);scene.add(entry.group);
+        entry.spinners=[];entry.group.traverse(child=>{if(child.userData.spin)entry.spinners.push(child);});
+        if(a)placeAnimal(entry,time);
+      }
+      if(previewObject?.userData.object?.type===type)clearPreview();
+      updateAnimalDetail();renderer.shadowMap.needsUpdate=true;schedule();
     },
     quality(value){
       quality=value==='auto'?(modest?'low':'balanced'):value;

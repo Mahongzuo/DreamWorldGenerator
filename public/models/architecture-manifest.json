@@ -1,0 +1,95 @@
+{
+  "generator": "Blender 4.5 original architecture",
+  "assets": [
+    {
+      "id": "build-moon-gate",
+      "width": 6.2,
+      "depth": 2.4,
+      "category": "house",
+      "triangles": 1922,
+      "meshes": 1,
+      "bytes": 170852
+    },
+    {
+      "id": "build-huizhou",
+      "width": 5.5,
+      "depth": 4.8,
+      "category": "house",
+      "triangles": 926,
+      "meshes": 1,
+      "bytes": 87232
+    },
+    {
+      "id": "build-red-pagoda",
+      "width": 4.7,
+      "depth": 4.7,
+      "category": "house",
+      "triangles": 4772,
+      "meshes": 1,
+      "bytes": 434552
+    },
+    {
+      "id": "build-covered-bridge",
+      "width": 7.2,
+      "depth": 3.1,
+      "category": "house",
+      "triangles": 1786,
+      "meshes": 1,
+      "bytes": 162624
+    },
+    {
+      "id": "build-teahall",
+      "width": 6.3,
+      "depth": 5.0,
+      "category": "house",
+      "triangles": 1316,
+      "meshes": 1,
+      "bytes": 127704
+    },
+    {
+      "id": "build-guildhall",
+      "width": 5.2,
+      "depth": 4.9,
+      "category": "house",
+      "triangles": 1360,
+      "meshes": 1,
+      "bytes": 125216
+    },
+    {
+      "id": "build-chapel",
+      "width": 5.0,
+      "depth": 5.9,
+      "category": "house",
+      "triangles": 1196,
+      "meshes": 1,
+      "bytes": 115752
+    },
+    {
+      "id": "build-thatch",
+      "width": 5.4,
+      "depth": 4.6,
+      "category": "house",
+      "triangles": 1770,
+      "meshes": 1,
+      "bytes": 166748
+    },
+    {
+      "id": "build-villa",
+      "width": 6.1,
+      "depth": 5.6,
+      "category": "house",
+      "triangles": 1520,
+      "meshes": 1,
+      "bytes": 148440
+    },
+    {
+      "id": "build-lighthouse",
+      "width": 4.0,
+      "depth": 4.0,
+      "category": "house",
+      "triangles": 1302,
+      "meshes": 1,
+      "bytes": 113824
+    }
+  ]
+}

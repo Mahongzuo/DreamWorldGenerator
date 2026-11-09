@@ -1,0 +1,32 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><title>精细模型 · WebGL 回归</title><style>body{margin:20px;font:15px system-ui;background:#eeeede;color:#29432f}pre{white-space:pre-wrap}canvas{max-width:100%}button{padding:12px;margin:8px}</style><h1>36 款新模型 · 实际 WebGL 渲染</h1><pre id="result">加载中…</pre><button id="save">下载模型全景</button><script type="module">
+import * as T from 'three';
+import {createPackModel,preloadModelPack,modelStats,setModelDetail,animatePackModel} from '../src/model-pack.js';
+import {modelDefinitions} from '../src/asset-registry.js';
+import {items} from '../src/sandbox-state.js';
+import {disposeGroup} from '../src/model.js';
+const scene=new T.Scene();scene.background=new T.Color('#e4e6d6');scene.add(new T.HemisphereLight(0xffffff,0x687b4e,3));
+const sun=new T.DirectionalLight(0xffeed4,3);sun.position.set(-10,30,20);scene.add(sun);
+const renderer=new T.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});renderer.setSize(1200,820);document.body.append(renderer.domElement);
+const camera=new T.PerspectiveCamera(40,1200/820,.1,200);camera.position.set(12,38,48);camera.lookAt(0,0,-1);
+const ids=Object.keys(modelDefinitions).filter(id=>!id.startsWith('pack-')),groups=new Map(),checks=[];
+const assert=(ok,label)=>{if(!ok)throw Error(label);checks.push('PASS '+label);};
+let done=false,travel=0,last=performance.now();
+preloadModelPack(id=>{
+ if(!ids.includes(id))return;
+ const meta=modelDefinitions[id],i=ids.indexOf(id),o={id:i+1,w:meta.width,d:meta.depth};
+ const g=createPackModel(items[id],o);g.position.set((i%6-2.5)*6,0,(Math.floor(i/6)-2.5)*6);scene.add(g);groups.set(id,g);
+ if(groups.size===ids.length)validate();
+});
+for(const id of ids){const meta=modelDefinitions[id];createPackModel(items[id],{id:1,w:meta.width,d:meta.depth});}
+function validate(){try{
+ assert(groups.size===36,'36 款模型经实际延迟加载器成功加载');
+ const near=()=>{renderer.render(scene,camera);return renderer.info.render.calls;};
+ const detailed=near();for(const g of groups.values())setModelDetail(g,false);const simplified=near();
+ assert(simplified<detailed,'动物远景合并网格降低绘制调用');
+ for(const g of groups.values())setModelDetail(g,true);
+ document.querySelector('#result').textContent=checks.join('\n')+'\n'+JSON.stringify({models:groups.size,detailedDraws:detailed,distantDraws:simplified,triangles:renderer.info.render.triangles,cache:modelStats()},null,2);
+ done=true;
+}catch(e){document.querySelector('#result').textContent='FAIL '+e.stack;}}
+function frame(now){const dt=Math.min(.05,(now-last)/1000);last=now;travel+=dt*.4;for(const g of groups.values())animatePackModel(g,{delta:dt,speed:.4,travel});renderer.render(scene,camera);requestAnimationFrame(frame);}requestAnimationFrame(frame);
+document.querySelector('#save').onclick=()=>{renderer.render(scene,camera);const a=document.createElement('a');a.href=renderer.domElement.toDataURL();a.download='linqi-expanded-models.png';a.click();};
+</script></html>
