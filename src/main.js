@@ -90,10 +90,28 @@ let linked=Boolean(location.search), origin=loadWorld(), world=origin;
 let mode='build',category='house',active='cedar',selected=null,draft=null,width=items[active].width,filter='';
 let viewport,toastTimer,before=[],after=[],nextId=1,pending=null,frame=0;
 let open=false,rx=0,rz=0,motion=!matchMedia('(prefers-reduced-motion: reduce)').matches;
-const atlas=new Map(),edits=new Map();
+const atlas=new Map(),edits=new Map(),unsavedRegions=new Map();
+const originKey=tileKey(0,0);
+const savedRegions=new Set();
+try{
+  if(localStorage.getItem(STORE_KEY)&&!linked)savedRegions.add(originKey);
+  for(let i=0;i<localStorage.length;i++){
+    const name=localStorage.key(i);
+    if(!name?.startsWith(ATLAS_KEY+'/'))continue;
+    const key=name.slice(ATLAS_KEY.length+1);
+    const coords=key.split(',').map(Number);
+    if(coords.length===2&&coords.every(Number.isSafeInteger)&&tileKey(...coords)===key)savedRegions.add(key);
+  }
+}catch{/* A storage failure leaves the session's edits in memory. */}
+const claimed=(x,z)=>{
+  const key=tileKey(x,z);
+  return key===originKey||savedRegions.has(key)||unsavedRegions.has(key);
+};
+const directions={'0,-1':'北','-1,0':'西','1,0':'东','0,1':'南'};
 function readRegion(x,z){
   if(x===0&&z===0)return origin;
   const key=tileKey(x,z);
+  if(unsavedRegions.has(key))return unsavedRegions.get(key);
   if(atlas.has(key)) return atlas.get(key);
   let region;
   try{region=normalize(JSON.parse(localStorage.getItem(ATLAS_KEY+'/'+key)));}catch{region=null;}
@@ -110,8 +128,8 @@ try{
     if(open){
       rx=Number.isSafeInteger(config.x)?config.x:0;
       rz=Number.isSafeInteger(config.z)?config.z:0;
+      if(!claimed(rx,rz))rx=rz=0;
       world=readRegion(rx,rz);
-      mode='camera';
     }
   }
 }catch{/* Keep the initial plot if storage is unavailable. */}
@@ -128,7 +146,7 @@ document.querySelector('#app').innerHTML=`
   <div class="top-actions">
     <span class="save-state" id="save-state"><span class="dot"></span><span id="save-label">本地存档</span></span>
     <button type="button" class="btn" id="journal-open" aria-label="打开观察笔记">${icon('book',16)} <span class="journal-label">观察笔记</span><strong id="journal-count">0</strong></button>
-    <button type="button" class="btn map-btn" id="map-mode" aria-pressed="false">${icon('map',16)}<span id="map-label">拓展地图</span></button>
+    <button type="button" class="btn map-btn" id="map-mode" aria-pressed="false">${icon('map',16)}<span id="map-label">扩建领地</span></button>
     <button type="button" class="btn" id="share" aria-label="复制设计链接" title="复制设计链接">${icon('link',16)}<span class="share-text">分享</span></button>
     <button type="button" class="btn primary" id="snapshot">${icon('camera',16)}拍照</button>
   </div>
@@ -153,7 +171,7 @@ document.querySelector('#app').innerHTML=`
         <div class="stage-head"><span class="badge" id="mode-tag"></span><span class="badge" id="weather-tag"></span></div>
         <div class="atlas-controls" id="atlas-controls" hidden>
           <div class="atlas-coord badge" id="atlas-coord"></div>
-          <div class="compass" role="group" aria-label="前往相邻区域">
+          <div class="compass" role="group" aria-label="扩建或前往相邻领地">
             <button class="btn compass-n" type="button" data-move="0,-1" aria-label="向北拓展" title="向北拓展">↑</button>
             <button class="btn compass-w" type="button" data-move="-1,0" aria-label="向西拓展" title="向西拓展">←</button>
             <button class="btn compass-home" id="atlas-home" type="button" aria-label="回到起点" title="回到起点">${icon('cabin',14)}</button>
@@ -194,6 +212,11 @@ document.querySelector('#app').innerHTML=`
           ${toolbarIcon('undo','undo','撤销')}
           ${toolbarIcon('redo','redo','重做')}
         </div>
+      </div>
+      <div class="territory-bar">
+        <div><strong id="territory-status">起点领地</strong><span id="territory-hint">沿东、南、西、北扩建，每次增加一块可建造地形。</span></div>
+        <button class="btn primary" type="button" id="open-territory">${icon('map',15)} 扩建领地</button>
+        <label class="territory-picker" id="territory-picker" hidden><span>前往领地</span><select id="territory-select" aria-label="前往已扩建领地"></select></label>
       </div>
       <div class="viewfoot">
         <span class="hints">${icon('mouse',13)} <span id="tool-tip"></span></span><span class="metrics" id="metrics"></span>
@@ -381,25 +404,58 @@ function renderInspector(){
   }
   inspector.innerHTML=`<div class="inspector-head"><strong>${mode==='build' ? items[active].name : toolLabels[mode]}</strong><span>${mode==='build' ? '已装备' : '当前工具'}</span></div><p>${toolTip()}</p>`;
 }
-function save(){
+function writeRegion(key,data){
+  unsavedRegions.set(key,data);
+  localStorage.setItem(key===originKey?STORE_KEY:ATLAS_KEY+'/'+key,JSON.stringify(data));
+  savedRegions.add(key);
+  unsavedRegions.delete(key);
+}
+function persistRegion(key,data){
   try{
-    if(open&&(rx!==0||rz!==0)){
-      const key=tileKey(rx,rz);
-      atlas.set(key,world);
-      localStorage.setItem(ATLAS_KEY+'/'+key,JSON.stringify(world));
-    }else{
-      origin=world;
-      localStorage.setItem(STORE_KEY,JSON.stringify(world));
-    }
-    byId('save-label').textContent='已存本机';
+    // A shared scene becomes the origin when its first neighboring plot is claimed.
+    if(linked&&key!==originKey)writeRegion(originKey,origin);
+    writeRegion(key,data);
     if(linked){
       const local=new URL(location.href);
       local.search='';
       window.history.replaceState(null,'',local);
       linked=false;
     }
-    rememberLocation();
-  }catch{byId('save-label').textContent='存档不可用';}
+    return true;
+  }catch{
+    unsavedRegions.set(key,data);
+    return false;
+  }
+}
+function save(){
+  const key=tileKey(rx,rz);
+  if(key===originKey)origin=world;
+  else atlas.set(key,world);
+  persistRegion(key,world);
+  rememberLocation();
+}
+function syncTerritory(){
+  const current=tileKey(rx,rz);
+  const keys=[...new Set([originKey,...savedRegions,...unsavedRegions.keys()])];
+  const status=unsavedRegions.has(current)?'仅保存在本次会话':linked&&current===originKey?'分享场景':
+    savedRegions.has(current)?'已存本机':'等待编辑';
+  byId('save-label').textContent=status;
+  byId('territory-status').textContent=open?`领地 ${rx}, ${rz} · 共 ${keys.length} 块 · ${status}`:`起点领地 · ${status}`;
+  byId('territory-hint').textContent=open?'带 + 的箭头扩建一块地，其他箭头切换已扩建的地块。':'沿东、南、西、北扩建，每次增加一块可建造地形。';
+  byId('open-territory').hidden=open;
+  byId('territory-picker').hidden=!open;
+  const select=byId('territory-select');
+  select.replaceChildren(...keys.map(key=>new Option(key===originKey?'起点 (0, 0)':key.replace(',','，'),key)));
+  select.value=current;
+  for(const button of document.querySelectorAll('#atlas-controls [data-move]')){
+    const [dx,dz]=button.dataset.move.split(',').map(Number);
+    const direction=directions[button.dataset.move];
+    const isNew=!claimed(rx+dx,rz+dz);
+    const label=isNew?`向${direction}扩建`:`前往${direction}边领地`;
+    button.title=label;
+    button.setAttribute('aria-label',label);
+    button.classList.toggle('unclaimed',isNew);
+  }
 }
 function sync(){
   nextId=Math.max(0,...world.objects.map(o=>o.id),...world.strokes.map(o=>o.id))+1;
@@ -410,7 +466,8 @@ function sync(){
   byId('atlas-controls').hidden=!open;
   byId('atlas-coord').textContent=`X ${rx} / Z ${rz}`;
   byId('map-mode').setAttribute('aria-pressed',open);
-  byId('map-label').textContent=open?'回到沙盘':'拓展地图';
+  byId('map-label').textContent=open?'回到起点沙盘':'扩建领地';
+  syncTerritory();
   byId('motion').setAttribute('aria-pressed',motion);
   byId('motion').textContent=motion?'动态开':'动态关';
   stage.classList.toggle('open-land',open);
@@ -422,7 +479,7 @@ function sync(){
   byId('undo').disabled=before.length===0;
   byId('redo').disabled=after.length===0;
   for(const b of document.querySelectorAll('[data-world]')) b.setAttribute('aria-pressed',world[b.dataset.world]===b.dataset.value);
-  viewport?.update(world,open?{x:rx,z:rz,read:readRegion}:null);
+  viewport?.update(world,open?{x:rx,z:rz,read:readRegion,claimed}:null);
   showMode();
   renderInspector();
   renderGuide();
@@ -433,7 +490,6 @@ function commit(next){
   if(before.length>42) before.shift();
   after=[];
   world=next;
-  syncRegionData();
   save();
   sync();
 }
@@ -450,14 +506,9 @@ function history(redo=false){
   (redo?before:after).push(world);
   world=stack.pop();
   selected=null;
-  syncRegionData();
   save();
   sync();
   announce(redo?'已重做':'已撤销');
-}
-function syncRegionData(){
-  if(!open||(!rx&&!rz))origin=world;
-  else atlas.set(tileKey(rx,rz),world);
 }
 function stashHistory(){
   if(!before.length&&!after.length)return;
@@ -471,6 +522,10 @@ function restoreHistory(){
 }
 function travel(dx,dz,follow=false){
   if(!open||(!dx&&!dz)||!Number.isSafeInteger(rx+dx)||!Number.isSafeInteger(rz+dz))return;
+  if(!claimed(rx+dx,rz+dz)){
+    if(!follow)announce('用画布右上角带 + 的方向箭头扩建这块地');
+    return;
+  }
   if(mode==='walk'&&!follow){endExploring();mode='camera';}
   cancelDraft();
   stashHistory();
@@ -482,7 +537,18 @@ function travel(dx,dz,follow=false){
   sync();
   if(!follow)viewport?.reset();
   rememberLocation();
-  announce(`${biomes[biomeOf(world)].label} · ${rx}, ${rz}`);
+  announce(`已切换到领地 ${rx}, ${rz}`);
+}
+function openNeighbor(button){
+  const [dx,dz]=button.dataset.move.split(',').map(Number);
+  const x=rx+dx,z=rz+dz;
+  if(!Number.isSafeInteger(x)||!Number.isSafeInteger(z))return;
+  const expanding=!claimed(x,z);
+  let stored=true;
+  if(expanding)stored=persistRegion(tileKey(x,z),readRegion(x,z));
+  switchMode('build');
+  travel(dx,dz);
+  if(expanding)announce(stored?`已向${directions[button.dataset.move]}扩建，可在新领地建造`:'已扩建，本机存储不可用，本次会话内保留');
 }
 function toggleMap(){
   endExploring();
@@ -493,12 +559,12 @@ function toggleMap(){
   rx=rz=0;
   world=origin;
   restoreHistory();
-  mode=open?'camera':'build';
+  mode='build';
   sync();
   renderCatalog();
   viewport?.reset();
   rememberLocation();
-  announce(open?'拖动地图或使用方向键，前往相邻领地':'已回到起点沙盘');
+  announce(open?'点击画布右上角带 + 的方向箭头扩建领地':'已回到起点沙盘');
 }
 function switchMode(next){
   if(mode==='walk'&&next!=='walk')endExploring();
@@ -596,7 +662,7 @@ function down(p){
   if(mode==='spawn'){startExploring(p.x,p.z);return;}
   if(mode==='walk')return;
   if(open&&!inBounds(p.x,p.z,.08)){
-    announce('请先漫游到这片领地，再编辑它');
+    announce('用右上角方向箭头或下方领地清单切换编辑区');
     return;
   }
   if(mode==='erase'){erase(p);return;}
@@ -695,8 +761,6 @@ catch(error){
 }
 sync();
 viewport?.motion(motion);
-if(linked)byId('save-label').textContent='链接场景';
-else byId('save-label').textContent='本地自动存档';
 renderCatalog();
 
 for(const key of Object.keys(toolLabels)) byId('mode-'+key).addEventListener('click',()=>switchMode(key));
@@ -766,6 +830,15 @@ byId('load-theme').addEventListener('click',()=>{
   announce(`已载入${themes[name].label}，可撤销`);
 });
 byId('map-mode').addEventListener('click',toggleMap);
+byId('open-territory').addEventListener('click',()=>{
+  toggleMap();
+  document.querySelector('#atlas-controls [data-move]')?.focus({preventScroll:true});
+});
+byId('territory-select').addEventListener('change',e=>{
+  const [x,z]=e.target.value.split(',').map(Number);
+  switchMode('build');
+  travel(x-rx,z-rz);
+});
 byId('explore').addEventListener('click',()=>{
   if(mode==='walk'||mode==='spawn'){switchMode('build');return;}
   if(hasVisitor){startExploring();return;}
@@ -795,8 +868,10 @@ document.addEventListener('keyup',e=>{const key=walkKeys[e.key.toLowerCase()];if
 byId('atlas-controls').addEventListener('click',e=>{
   const button=e.target.closest('button');
   if(!button)return;
-  if(button.id==='atlas-home')travel(-rx,-rz);
-  else if(button.dataset.move)travel(...button.dataset.move.split(',').map(Number));
+  if(button.id==='atlas-home'){
+    switchMode('build');
+    travel(-rx,-rz);
+  }else if(button.dataset.move)openNeighbor(button);
 });
 byId('motion').addEventListener('click',()=>{
   motion=!motion;

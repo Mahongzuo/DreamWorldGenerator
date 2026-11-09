@@ -116,7 +116,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     if(region&&orbitMode&&!playing){
       const dx=Math.floor((controls.target.x+LAND.x)/(LAND.x*2));
       const dz=Math.floor((controls.target.z+LAND.z)/(LAND.z*2));
-      if(dx||dz)onRegion(dx,dz,true);
+      if((dx||dz)&&region.claimed(region.x+dx,region.z+dz))onRegion(dx,dz,true);
     }
     if((living||playing)&&ecology){
       if(living){time+=delta;kit.time.value=time;}
@@ -545,6 +545,8 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby) {
     const nav=land.userData.navigation;
     const can=(x,z)=>{
       if(region&&(Math.abs(x)>LAND.x-.32||Math.abs(z)>LAND.z-.32)){
+        const dx=Math.floor((x+LAND.x)/(LAND.x*2)),dz=Math.floor((z+LAND.z)/(LAND.z*2));
+        if((dx||dz)&&!region.claimed(region.x+dx,region.z+dz))return false;
         const edgeX=T.MathUtils.clamp(x,-LAND.x+.323,LAND.x-.323);
         const edgeZ=T.MathUtils.clamp(z,-LAND.z+.323,LAND.z-.323);
         return nav.valid(edgeX,edgeZ,.25);
