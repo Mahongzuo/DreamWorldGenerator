@@ -93,7 +93,7 @@ export function buildCreature(kit,o,def){
 }
 
 export function buildAvatar(kit){
-  const root=new T.Group(), body=batch(kit);
+  const root=new T.Group(),visual=new T.Group(), body=batch(kit);root.add(visual);
   const jacket='#cb8861', pants='#526d6c',boots='#695441';
   const pack='#4b6957',skin='#d9ad86';
   const p=(b,shape,c,x,y,z,w,h,d,rx=0,rz=0)=>b.put(shape,'basic',c,x,y,z,w,h,d,rx,0,rz,false);
@@ -105,17 +105,19 @@ export function buildAvatar(kit){
   p(body,'box',pack,0,.94,-.205,.35,.39,.16);
   p(body,'disc','#c5ad79',0,1.09,-.245,.105,.38,.105,0,Math.PI/2);
   for(const x of [-.162,.162])p(body,'box','#77927a',x,.94,-.113,.045,.41,.145);
-  body.finish(root);
-  const arms=[],legs=[];
+  body.finish(visual);
+  const arms=[],legs=[],knees=[];
   for(const s of [-1,1]){
     const arm=new T.Group(), leg=new T.Group(), a=batch(kit),b=batch(kit);
     arm.position.set(s*.264,1.078,0);
     leg.position.set(s*.125,.676,0);
     p(a,'rock',jacket,0,-.163,0,.083,.19,.075);
     p(a,'rock',skin,0,-.356,.015,.067,.070,.063);
-    p(b,'rock',pants,0,-.238,0,.101,.245,.106);
-    p(b,'rock',boots,0,-.509,.062,.108,.112,.171);
-    a.finish(arm);b.finish(leg);root.add(arm,leg);arms.push(arm);legs.push(leg);
+    p(b,'rock',pants,0,-.14,0,.101,.145,.106);
+    const knee=new T.Group(),lower=batch(kit);knee.position.y=-.285;
+    p(lower,'rock',pants,0,-.105,0,.090,.12,.094);p(lower,'rock',boots,0,-.224,.062,.108,.112,.171);
+    lower.finish(knee);leg.add(knee);knees.push(knee);
+    a.finish(arm);b.finish(leg);visual.add(arm,leg);arms.push(arm);legs.push(leg);
   }
   const axe=new T.Group(),tool=batch(kit);
   p(tool,'box','#a27854',0,-.18,.035,.051,.52,.051,0,-.21);
@@ -132,12 +134,25 @@ export function buildAvatar(kit){
   p(blade,'box','#98835c',0,-.29,.035,.28,.05,.07);
   p(blade,'box','#745a3f',0,-.18,.035,.06,.18,.06);
   blade.finish(sword);sword.position.copy(axe.position);sword.visible=false;arms[1].add(sword);
-  function pose(t,moving,swing,weapon='axe'){
-    const wave=Math.sin(t*9.6)*(moving?.53:.03);
-    legs[0].rotation.x=wave;legs[1].rotation.x=-wave;
-    arms[0].rotation.x=-wave*.65;
-    arms[1].rotation.x=swing>0 ? -1.5*Math.sin(swing*Math.PI) : wave*.65;
-    arms[1].rotation.z=swing>0?.23:0;axe.visible=swing>0&&weapon!=='sword';sword.visible=swing>0&&weapon==='sword';
+  let gait=0,air=0,landBlend=0;
+  function pose(t,moving,swing,weapon='axe',motion=null,dt=1/60){
+    const speed=motion?.speed??(moving?2.7:0),fast=Math.min(1,speed/5.6),factor=1-Math.exp(-dt*18);
+    gait+=(Math.min(1,speed/1.5)-gait)*factor;
+    air+=((motion&&!motion.grounded?1:0)-air)*factor;
+    landBlend+=((motion?.state==='land'?1:0)-landBlend)*(1-Math.exp(-dt*25));
+    const phase=(motion?.travel??t*2.7)*Math.PI*2/1.75;
+    const wave=Math.sin(phase)*(.42+fast*.30)*gait*(1-air);
+    legs[0].rotation.x=wave-air*.36;legs[1].rotation.x=-wave+air*.18;
+    knees[0].rotation.x=Math.max(0,-Math.sin(phase))*.72*gait+air*.7+landBlend*.35;
+    knees[1].rotation.x=Math.max(0,Math.sin(phase))*.72*gait+air*.55+landBlend*.35;
+    arms[0].rotation.x=-wave*.8-air*.55;
+    arms[1].rotation.x=swing>0?-1.5*Math.sin(swing*Math.PI):wave*.8-air*.55;
+    arms[0].rotation.z=-air*.26;arms[1].rotation.z=swing>0?.23:air*.26;
+    visual.position.y=Math.abs(Math.sin(phase))*.045*gait*(1-air)-landBlend*.10;
+    visual.rotation.x=-(motion?.lean??0)-fast*.07*gait+landBlend*.12;
+    visual.rotation.z=-(motion?.turn??0)*.009*gait;
+    axe.visible=swing>0&&weapon!=='sword';sword.visible=swing>0&&weapon==='sword';
+    shadow.visible=air<.08;
   }
   return {group:root,pose};
 }

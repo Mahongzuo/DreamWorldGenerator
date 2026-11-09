@@ -27,7 +27,7 @@ try{
       harvested:Array.isArray(saved.harvested)?saved.harvested.filter(tag=>typeof tag==='string').slice(-1500):[]};
   }
 }catch{/* Start with an empty field journal. */}
-const walkKeys={w:'forward',arrowup:'forward',s:'back',arrowdown:'back',a:'left',arrowleft:'left',d:'right',arrowright:'right',shift:'run'};
+const walkKeys={w:'forward',arrowup:'forward',s:'back',arrowdown:'back',a:'left',arrowleft:'left',d:'right',arrowright:'right',shift:'run',c:'walk'};
 const toolModes={select:'选择',build:'建造',erase:'橡皮',camera:'漫游',spawn:'放置探访者',walk:'第三人称探索'};
 let strike=null,nearby=null,fieldNoteTimer,mineStrike=null,lastHurt=0;
 function saveJournal(){
@@ -225,18 +225,15 @@ document.querySelector('#app').innerHTML=`
         <div class="spawn-hint" id="spawn-hint" hidden><strong>选一处干燥地面放置探访者</strong><button type="button" class="btn" id="quick-spawn">从步道出发</button></div>
         <div class="walker-hud" id="walker-hud" hidden>
           <article class="walk-note" id="walk-note" hidden><strong></strong><p></p></article>
-          <div class="walk-info"><strong>探访者</strong><span id="nearby">靠近动物、树木或建筑</span></div>
+          <div class="walk-info"><strong>探访者</strong><span id="locomotion" aria-live="off">站立 · 0.0 m/s</span><span id="nearby">靠近动物、树木或建筑</span></div>
+          <div class="locomotion-actions"><button type="button" class="btn" id="jump">跳跃 <kbd>Space</kbd></button><button type="button" class="btn" id="sprint" aria-pressed="false">冲刺 <kbd>Shift</kbd></button><button type="button" class="btn" id="recenter-camera">镜头回正 <kbd>Q</kbd></button></div>
+          <small class="walk-help">WASD 移动 · C 慢走 · 拖动看向 · 滚轮调距离</small>
           <div class="walk-actions">
             <button type="button" class="btn" id="observe">${icon('book',16)} 观察 <kbd>E</kbd></button>
             <button type="button" class="btn" id="chop">${icon('axe',16)} 伐木 <kbd>F</kbd></button>
             <button type="button" class="btn" id="mine">采矿 / 拆除 <kbd>G</kbd></button><button type="button" class="btn" id="attack">攻击 <kbd>J</kbd></button><button type="button" class="btn" id="respawn" hidden>营地复活 <kbd>R</kbd></button><span class="wood-badge" id="wood-count"></span>
           </div><div class="combat-note" id="combat-note" role="status"></div>
-          <div class="dpad" aria-label="角色移动">
-            <button type="button" class="walk-n" aria-label="向前走" data-walk="forward">↑</button>
-            <button type="button" class="walk-w" aria-label="向左走" data-walk="left">←</button>
-            <button type="button" class="walk-s" aria-label="向后走" data-walk="back">↓</button>
-            <button type="button" class="walk-e" aria-label="向右走" data-walk="right">→</button>
-          </div>
+          <div class="joystick" id="joystick" role="group" aria-label="移动摇杆"><span class="joystick-ring"></span><span id="joystick-knob"></span><small>移动</small></div>
         </div>
         <div class="stage-tools">
           ${toolbarIcon('top','grid','俯视视角')}
@@ -309,7 +306,7 @@ function announce(text){
 const selectedObject=()=>world.objects.find(o=>o.id===selected);
 function toolTip(){
   if(mode==='spawn')return '点击地面放置角色，或从预设步道出发。';
-  if(mode==='walk')return 'WASD / 方向键移动 · 拖动转向 · E 观察 · F 伐木 · G 采矿拆除 · J 攻击 · Esc 返回建造。';
+  if(mode==='walk')return 'WASD 移动 · Shift 冲刺 · Space 跳跃 · C 慢走 · 拖动看向 · Q 镜头回正 · E 观察 · F 伐木 · G 采矿拆除 · J 攻击 · Esc 返回建造。';
   if(mode!=='build') {
     if(mode==='camera'&&open)return matchMedia('(pointer: coarse)').matches?'拖动前往相邻领地，双指旋转或缩放。':'拖动或右键平移，滚轮缩放；中键拖动旋转。';
     return help[mode];
@@ -388,7 +385,7 @@ function startExploring(x,z){
   stage.focus({preventScroll:true});
 }
 function endExploring(){
-  viewport?.endWalk();
+  clearStick();viewport?.endWalk();
   observedType=null;
   strike=null;
   clearTimeout(fieldNoteTimer);byId('walk-note').hidden=true;
@@ -460,6 +457,8 @@ function payFor(o){
  return {...paid,built:paid.built+(items[o.type].brush?0:1)};
 }
 function gameEvent(event){
+ if(event.type==='controls-reset'){byId('sprint').setAttribute('aria-pressed','false');return;}
+ if(event.type==='locomotion'){byId('locomotion').textContent=event.text;byId('locomotion').dataset.state=event.state;return;}
  if(event.type==='status'){if(world.game.mode==='adventure'&&world.game.health>0)byId('combat-note').textContent=event.text;return;}
  if(world.game.mode!=='adventure')return;
  if(event.type==='defeat'){
@@ -1008,23 +1007,28 @@ byId('game-mode').addEventListener('change',e=>{cancelDraft();mineStrike=strike=
 for(const id of Object.keys(recipes))byId('craft-'+id).addEventListener('click',()=>{
  const next=craft(world.game,id);if(!next){announce('材料不足，或已经装备 / 生命已满');return;}setGame(next);announce('已制作 '+recipes[id].name);
 });
-for(const key of document.querySelectorAll('[data-walk]')){
-  key.addEventListener('pointerdown',e=>{
-    e.preventDefault();
-    key.setPointerCapture(e.pointerId);
-    viewport?.move(key.dataset.walk,true);
-  });
-  for(const type of ['pointerup','pointercancel','lostpointercapture'])
-    key.addEventListener(type,()=>viewport?.move(key.dataset.walk,false));
-}
+byId('jump').addEventListener('pointerdown',e=>{e.preventDefault();e.currentTarget.setPointerCapture(e.pointerId);viewport?.jump(true);});
+for(const type of ['pointerup','pointercancel','lostpointercapture'])byId('jump').addEventListener(type,()=>viewport?.jump(false));
+byId('jump').addEventListener('click',e=>{if(e.detail===0){viewport?.jump(true);viewport?.jump(false);}});
+byId('sprint').addEventListener('click',()=>{byId('sprint').setAttribute('aria-pressed',String(viewport?.toggleRun()));stage.focus({preventScroll:true});});
+byId('recenter-camera').addEventListener('click',()=>viewport?.recenter());
+const joystick=byId('joystick'),knob=byId('joystick-knob');let stickPointer=null;
+function steerStick(e){const r=joystick.getBoundingClientRect(),dx=e.clientX-r.left-r.width/2,dy=e.clientY-r.top-r.height/2,length=Math.hypot(dx,dy),scale=Math.min(1,32/(length||1));
+ const x=dx*scale,z=dy*scale;knob.style.transform=`translate(${x}px,${z}px)`;viewport?.steer(length<5?0:x/32,length<5?0:-z/32);}
+joystick.addEventListener('pointerdown',e=>{if(stickPointer!==null)return;e.preventDefault();stickPointer=e.pointerId;joystick.setPointerCapture(e.pointerId);steerStick(e);});
+joystick.addEventListener('pointermove',e=>{if(e.pointerId===stickPointer)steerStick(e);});
+function clearStick(){stickPointer=null;knob.style.transform='';viewport?.steer(0,0);}
+for(const type of ['pointerup','pointercancel','lostpointercapture'])joystick.addEventListener(type,e=>{if(e.pointerId===stickPointer)clearStick();});
+window.addEventListener('blur',clearStick);
+document.addEventListener('visibilitychange',()=>{if(document.hidden)clearStick();});
 const journalDialog=byId('journal-dialog');
 byId('journal-open').addEventListener('click',()=>{
-  viewport?.clearMovement();renderJournal();journalDialog.showModal();
+  clearStick();viewport?.clearMovement();renderJournal();journalDialog.showModal();
 });
 byId('journal-close').addEventListener('click',()=>journalDialog.close());
 window.addEventListener('blur',()=>viewport?.clearMovement());
 document.addEventListener('visibilitychange',()=>{if(document.hidden)viewport?.clearMovement();});
-document.addEventListener('keyup',e=>{const key=walkKeys[e.key.toLowerCase()];if(key)viewport?.move(key,false);});
+document.addEventListener('keyup',e=>{const key=walkKeys[e.key.toLowerCase()];if(key)viewport?.move(key,false);if(e.code==='Space')viewport?.jump(false);});
 byId('atlas-controls').addEventListener('click',e=>{
   const button=e.target.closest('button');
   if(!button)return;
@@ -1061,6 +1065,8 @@ document.addEventListener('keydown',e=>{
   if(e.target.matches('input,textarea,select'))return;
   const key=e.key.toLowerCase();
   if(mode==='walk'&&!e.metaKey&&!e.ctrlKey&&!e.altKey){
+    if(e.code==='Space'){e.preventDefault();if(!e.repeat)viewport?.jump(true);return;}
+    if(key==='q'&&!e.repeat){viewport?.recenter();return;}
     if(walkKeys[key]){e.preventDefault();viewport?.move(walkKeys[key],true);return;}
     if(key==='e'&&!e.repeat){observeNow();return;}
     if(key==='f'&&!e.repeat){chopNow();return;}

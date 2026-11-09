@@ -1,6 +1,6 @@
-import {modelDefinitions,collisionParts} from './asset-registry.js';
+import {modelDefinitions,modelHeight,collisionParts} from './asset-registry.js';
 import {inside,inFootprint,isSolid,isTree,items,tileInside} from './sandbox-state.js';
-import {bridgeRise} from './asset-models.js';
+import {bridgeRise,architectureHeight} from './asset-models.js';
 
 const size=3;
 const key=(x,z)=>Math.floor(x/size)+','+Math.floor(z/size);
@@ -24,6 +24,44 @@ export function createNavigation(world,field,region,trees,bridges){
   for(const tree of allTrees)add(grid,{tree},tree.x,tree.z,tree.crown??tree.r);
   for(const o of crossings)add(deckGrid,{object:o},o.x,o.z,Math.hypot(o.w,o.d)*.5);
   for(const piece of bridges)add(deckGrid,{piece},piece.x,piece.z,piece.w*.5+.2);
+  function nearby(x,z,r){
+    const found=new Set();
+    for(let i=Math.floor((x-r)/size);i<=Math.floor((x+r)/size);i++)
+      for(let j=Math.floor((z-r)/size);j<=Math.floor((z+r)/size);j++)
+        for(const entry of grid.get(i+','+j)??[])found.add(entry);
+    return found;
+  }
+  // Rounded rectangle vs circular capsule footprint, with an outward world-space normal.
+  function shapeContact(entry,x,z,r){
+    const {object:o,tree,margin=0}=entry;
+    if(tree){const dx=x-tree.x,dz=z-tree.z,d=Math.hypot(dx,dz),depth=tree.r+r-d;return depth>0?{x:d?dx/d:1,z:d?dz/d:0,depth}:null;}
+    const c=Math.cos(o.a),s=Math.sin(o.a),dx=x-o.x,dz=z-o.z,lx=c*dx-s*dz,lz=s*dx+c*dz;
+    const hx=o.w/2+margin,hz=o.d/2+margin,qx=Math.max(-hx,Math.min(hx,lx)),qz=Math.max(-hz,Math.min(hz,lz));
+    let nx=lx-qx,nz=lz-qz,d=Math.hypot(nx,nz),depth=r-d;
+    if(d){nx/=d;nz/=d;}else if(hx-Math.abs(lx)<hz-Math.abs(lz)){nx=Math.sign(lx)||1;nz=0;depth=r+hx-Math.abs(lx);}else{nx=0;nz=Math.sign(lz)||1;depth=r+hz-Math.abs(lz);}
+    return depth>0?{x:c*nx+s*nz,z:-s*nx+c*nz,depth}:null;
+  }
+  function contact(x,z,r=.30){
+    let deepest=null;
+    for(const entry of nearby(x,z,r)){const hit=shapeContact(entry,x,z,r);if(hit&&(!deepest||hit.depth>deepest.depth))deepest=hit;}
+    if(deepest)return deepest;
+    const allowed=(a,b)=>terrainBounds(a,b,r+.03)&&(deck(a,b,r)!==null||[[0,0],[-r,0],[r,0],[0,-r],[0,r]].every(([dx,dz])=>field.depth(a+dx,b+dz)<=.42));
+    if(allowed(x,z))return null;
+    // Sample the boundary's outward gradient; handles shorelines and unowned territory.
+    let nx=0,nz=0;
+    for(let i=0;i<16;i++){const a=i*Math.PI/8,dx=Math.cos(a),dz=Math.sin(a);if(allowed(x+dx*.15,z+dz*.15)){nx+=dx;nz+=dz;}}
+    const length=Math.hypot(nx,nz);return length?{x:nx/length,z:nz/length,depth:.01}:{x:0,z:0,depth:.01};
+  }
+  function cameraBlocked(x,y,z,r=.18){
+    if(y-r<(deck(x,z,r)??field.height(x,z)))return true;
+    for(const entry of nearby(x,z,r)){
+      if(!shapeContact(entry,x,z,r))continue;
+      const o=entry.object,t=entry.tree,base=field.height(o?.x??t.x,o?.z??t.z);
+      const height=o?(modelHeight(o)??(items[o.type].category==='house'?architectureHeight(items[o.type].form,o.w):Math.max(1,o.w))):Math.max(2,(t.crown??1)*2.7);
+      if(y+r>base&&y-r<base+height)return true;
+    }
+    return false;
+  }
   function solid(x,z,r,kind){
     const extra=Math.max(0,r-.75);
     for(let i=Math.floor((x-extra)/size);i<=Math.floor((x+extra)/size);i++){
@@ -73,7 +111,7 @@ export function createNavigation(world,field,region,trees,bridges){
     }
     return null;
   }
-  return {valid,sweep,find,trees:allTrees,height(x,z){return deck(x,z)??field.height(x,z);}};
+  return {valid,sweep,find,contact,cameraBlocked,support:(x,z,r=.30)=>deck(x,z,r)??field.height(x,z),trees:allTrees,height(x,z){return deck(x,z)??field.height(x,z);}};
 }
 
 // The same index holds wildlife and placed animals. Flights and swimmers occupy separate layers.
@@ -110,7 +148,18 @@ export function createAnimalCrowd(){
     }
     return true;
   }
-  return {remove,update,clearPath,fits(x,z,r,kind,ignore){return clearPath(x,z,x,z,r,kind,ignore);}};
+  function contact(x,z,r,kind,ignore){
+    const reach=r+largest+.04;let best=null;
+    for(let i=Math.floor((x-reach)/size);i<=Math.floor((x+reach)/size);i++)for(let j=Math.floor((z-reach)/size);j<=Math.floor((z+reach)/size);j++){
+      for(const other of cells.get(kind+':'+i+','+j)??[]){
+        if(other===ignore)continue;
+        const dx=x-other.x,dz=z-other.z,d=Math.hypot(dx,dz),depth=r+other.r+.04-d;
+        if(depth>0&&(!best||depth>best.depth))best={x:d?dx/d:1,z:d?dz/d:0,depth};
+      }
+    }
+    return best;
+  }
+  return {remove,update,clearPath,contact,fits(x,z,r,kind,ignore){return clearPath(x,z,x,z,r,kind,ignore);}};
 }
 
 export function makeWander(nav,x,z,r,kind,seed,radius=2,crowd){

@@ -1,3 +1,4 @@
+import {CHARACTER,createCharacter,stepCharacter,requestJump,releaseJump,stopCharacter,cameraSweep,cameraDistance} from './character-controller.js';
 import {createAdventureActors} from './adventure-actors.js';
 import {animalProfile} from './animal-behavior.js';
 import {modelDefinitions,modelHeight,collisionParts} from './asset-registry.js';
@@ -95,14 +96,14 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
 
   let pending=0,last=0,lifeTimer=0,time=0,lastShadow=0,metric='',paused=false,land,world,region,ecology,previewObject,hiddenObject;
   let gesture=null,orbitMode=false,living=false,playing=false,player,lookDrag,nearKey='';
-  let yaw=Math.PI,lift=2.55;
+  let yaw=Math.PI,pitch=.30,zoom=4.3,arm=4.3,cameraYaw=Math.PI,cameraPitch=.30,analog={side:0,forward:0},runLatch=false,lastMotion='';
   const movement=new Set();
-  const cameraGoal=new T.Vector3(),lookGoal=new T.Vector3();
+  const cameraGoal=new T.Vector3(),lookGoal=new T.Vector3(),cameraAnchor=new T.Vector3();
   let crowd=createAnimalCrowd(),playerBody=null;
   const continuousLand=createContinuousLand(kit);
   const objects=new Map();
   const adventure=createAdventureActors(scene,onGame);let gameStatusClock=0,inputSuspended=false;
-  window.addEventListener('blur',()=>{inputSuspended=true;movement.clear();adventure.pause();});
+  window.addEventListener('blur',()=>{inputSuspended=true;clearMovement();adventure.pause();});
   window.addEventListener('focus',()=>{inputSuspended=false;schedule();});
   const raycaster=new T.Raycaster(),ndc=new T.Vector2(),plane=new T.Plane(new T.Vector3(0,1,0),0);
   const hit=new T.Vector3(), localHit=new T.Vector3(), inverse=new T.Matrix4(), localRay=new T.Ray(), box=new T.Box3();
@@ -190,7 +191,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     return result;
   }
   canvas.addEventListener('pointerdown',(e)=>{
-    if(playing&&e.button===0){
+    if(playing&&(e.button===0||e.button===2)){
       e.stopImmediatePropagation();e.preventDefault();
       lookDrag={id:e.pointerId,x:e.clientX,y:e.clientY};
       canvas.setPointerCapture(e.pointerId);
@@ -206,8 +207,8 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
   canvas.addEventListener('pointermove',(e)=>{
     if(playing){
       if(lookDrag?.id===e.pointerId){
-        yaw-=(e.clientX-lookDrag.x)*.008;
-        lift=T.MathUtils.clamp(lift+(e.clientY-lookDrag.y)*.018,1.35,4.8);
+        yaw-=(e.clientX-lookDrag.x)*.005;
+        pitch=T.MathUtils.clamp(pitch+(e.clientY-lookDrag.y)*.004,-.12,1.12);
         lookDrag.x=e.clientX;lookDrag.y=e.clientY;
       }
       return;
@@ -227,6 +228,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     onInput(cancel?'cancel':'up',cancel?null:pointerData(e),e);
     if(canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
   }
+  canvas.addEventListener('wheel',e=>{if(playing){e.preventDefault();e.stopImmediatePropagation();zoom=T.MathUtils.clamp(zoom+e.deltaY*.004,2,7);schedule();}},{passive:false,capture:true});
   canvas.addEventListener('pointerup',e=>finish(e,false));
   canvas.addEventListener('pointercancel',e=>finish(e,true));
   canvas.addEventListener('lostpointercapture',e=>finish(e,true));
@@ -417,9 +419,11 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     if(player&&playing){
       player.tile=currentTile();
       const nav=land.userData.navigation;
-      const available=(x,z)=>crowd.fits(x,z,.25,'land',playerBody);
-      const safe=nav.find(player.x,player.z,.25,'land',2,available)??nav.find(player.x,player.z,.25,'land',8,available);
-      if(safe){player.x=safe.x;player.z=safe.z;}
+      if(landChange&&nav.contact(player.x,player.z,CHARACTER.radius)){
+        const available=(x,z)=>crowd.fits(x,z,CHARACTER.radius,'land',playerBody);
+        const safe=nav.find(player.x,player.z,CHARACTER.radius,'land',8,available);
+        if(safe){player.x=safe.x;player.z=safe.z;player.y=nav.support(safe.x,safe.z);player.vy=0;player.grounded=true;stopCharacter(player);}
+      }
       syncPlayerBody();
     }else if(player){
       avatar.group.visible=player.tile===currentTile();
@@ -512,10 +516,11 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     if(!land)return false;
     const nav=land.userData.navigation;
     const reuse=x===undefined&&player?.tile===currentTile();
-    const safe=nav.find(x??(reuse?player.x:(region?.x??0)*30+.10),z??(reuse?player.z:(region?.z??0)*22.8+5.45),.25,'land',4.5,(xx,zz)=>crowd.fits(xx,zz,.25,'land',playerBody));
+    const safe=nav.find(x??(reuse?player.x:(region?.x??0)*30+.10),z??(reuse?player.z:(region?.z??0)*22.8+5.45),CHARACTER.radius,'land',4.5,(xx,zz)=>crowd.fits(xx,zz,CHARACTER.radius,'land',playerBody));
     if(!safe)return false;
-    player={...safe,tile:currentTile(),a:reuse?player.a:Math.PI,t:0,swing:0,y:nav.height(safe.x,safe.z)};
-    yaw=player.a;lift=2.55;playing=true;syncPlayerBody();
+    player={...createCharacter(safe.x,safe.z,nav.support(safe.x,safe.z),reuse?player.a:Math.PI),tile:currentTile()};
+    yaw=cameraYaw=player.a;pitch=cameraPitch=.30;zoom=arm=4.3;lastMotion='';playing=true;clearMovement();syncPlayerBody();
+    cameraAnchor.set(player.x,player.y+1.12,player.z);
     adventure.sync(world,nav,crowd,player);
     movement.clear();
     controls.enabled=false;
@@ -524,7 +529,6 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     clearPreview();showFootprint(null);
     border.visible=false;
     walk(0);
-    follow.position.copy(cameraGoal);
     follow.lookAt(lookGoal);
     schedule();
     return true;
@@ -532,37 +536,23 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
   function endWalk(){
     if(!playing)return;
     adventure.clear();
-    playing=false;lookDrag=null;movement.clear();crowd.remove(playerBody);playerBody=null;
+    playing=false;lookDrag=null;clearMovement();crowd.remove(playerBody);playerBody=null;
     controls.enabled=true;
     stage.classList.remove('walking');
     nearKey='';onNearby(null);
     schedule();
   }
   function syncPlayerBody(){
-    if(!playerBody)playerBody={x:player.x,z:player.z,r:.25,kind:'land'};
+    if(!playerBody)playerBody={x:player.x,z:player.z,r:CHARACTER.radius,kind:'land'};
     playerBody.x=player.x;playerBody.z=player.z;crowd.update(playerBody);
   }
+  function clearMovement(){movement.clear();analog={side:0,forward:0};runLatch=false;stopCharacter(player);onGame({type:'controls-reset'});}
   function walk(dt){
     if(!player||!land)return;
-    if(world.game?.mode==='adventure'&&world.game.health<=0){movement.clear();return;}
-    const forward=Number(movement.has('forward'))-Number(movement.has('back'));
-    const side=Number(movement.has('right'))-Number(movement.has('left'));
-    const fast=movement.has('run'),speed=(fast?4.25:2.75)*dt;
-    const length=Math.hypot(side,forward)||1;
-    const dx=(Math.sin(yaw)*forward-Math.cos(yaw)*side)*speed/length;
-    const dz=(Math.cos(yaw)*forward+Math.sin(yaw)*side)*speed/length;
-    let moved=false;
-    const nav=land.userData.navigation;
-    const can=(x,z)=>{
-      return nav.sweep(player.x,player.z,x,z,.25,'land')&&crowd.clearPath(player.x,player.z,x,z,.25,'land',playerBody);
-    };
-    if(Math.hypot(dx,dz)>.0001){
-      for(const [xx,zz] of [[dx,dz],[dx,0],[0,dz]]){
-        if(!Math.hypot(xx,zz)||!can(player.x+xx,player.z+zz))continue;
-        player.x+=xx;player.z+=zz;
-        player.a=Math.atan2(xx,zz);moved=true;break;
-      }
-    }
+    if(world.game?.mode==='adventure'&&world.game.health<=0){clearMovement();return;}
+    const forward=Number(movement.has('forward'))-Number(movement.has('back'))+analog.forward;
+    const side=Number(movement.has('right'))-Number(movement.has('left'))+analog.side;
+    stepCharacter(player,{forward,side,yaw,run:movement.has('run')||runLatch,walk:movement.has('walk')},dt,land.userData.navigation,crowd,playerBody);
     if(region?.continuous){
       const [x,z]=regionAt(player.x,player.z);
       if((x!==region.x||z!==region.z)&&region.claimed(x,z)){
@@ -570,28 +560,28 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
       }
     }
     syncPlayerBody();
-    const height=land.userData.navigation.height(player.x,player.z);
-    player.y=dt?T.MathUtils.lerp(player.y,height,Math.min(1,dt*15)):height;
-    player.t+=dt*(moved?(fast?1.43:1):.30);
+    player.t+=dt;
     player.swing=Math.max(0,player.swing-dt*2.2);
     avatar.group.position.set(player.x,player.y,player.z);
     avatar.group.rotation.y=player.a;
-    avatar.pose(player.t,moved,player.swing,player.weapon);
-    const back=4.10+(lift-2.55)*.34;
-    const x=player.x-Math.sin(yaw)*back,z=player.z-Math.cos(yaw)*back;
-    let distance=back;
-    for(let d=.6;d<back;d+=.29){
-      const gx=player.x-Math.sin(yaw)*d,gz=player.z-Math.cos(yaw)*d;
-      if(world.objects.some(o=>items[o.type].category==='house'&&items[o.type].form!=='bridge'&&collisionParts(o).some(part=>inFootprint(gx,gz,part,.17)))){
-        distance=Math.max(.72,d-.31);break;
-      }
-    }
-    const cx=distance===back?x:player.x-Math.sin(yaw)*distance;
-    const cz=distance===back?z:player.z-Math.cos(yaw)*distance;
-    cameraGoal.set(cx,Math.max(player.y+lift,land.userData.field.height(cx,cz)+1.20),cz);
-    lookGoal.set(player.x+Math.sin(yaw)*1.51,player.y+1.08,player.z+Math.cos(yaw)*1.51);
-    follow.position.lerp(cameraGoal,dt?Math.min(1,dt*13):1);
-    follow.lookAt(lookGoal);
+    avatar.pose(player.t,player.speed>.07,player.swing,player.weapon,player,dt);
+    const nav=land.userData.navigation;
+    const blend=dt?1-Math.exp(-dt*22):1;
+    cameraYaw+=Math.atan2(Math.sin(yaw-cameraYaw),Math.cos(yaw-cameraYaw))*blend;
+    cameraPitch+=(pitch-cameraPitch)*blend;
+    cameraAnchor.x=player.x;cameraAnchor.z=player.z;
+    cameraAnchor.y+=(player.y+1.12-cameraAnchor.y)*(dt?1-Math.exp(-dt*15):1);
+    const horizontal=Math.cos(cameraPitch)*zoom;
+    cameraGoal.set(cameraAnchor.x-Math.sin(cameraYaw)*horizontal,cameraAnchor.y+Math.sin(cameraPitch)*zoom,cameraAnchor.z-Math.cos(cameraYaw)*horizontal);
+    const allowed=cameraSweep(cameraAnchor,cameraGoal,nav.cameraBlocked)*zoom;
+    arm=dt?cameraDistance(arm,allowed,dt):allowed;
+    follow.position.copy(cameraAnchor).lerp(cameraGoal,zoom?arm/zoom:0);
+    lookGoal.copy(cameraAnchor);follow.lookAt(lookGoal);
+    const fov=58+Math.min(1,player.speed/CHARACTER.sprint)*5;
+    follow.fov+=(fov-follow.fov)*(dt?1-Math.exp(-dt*6):1);follow.updateProjectionMatrix();
+    const stateText={idle:'站立',start:'起步',walk:'慢走',jog:'慢跑',sprint:'冲刺',pivot:'转身',stop:'停步',jump:'起跳',fall:'下落',land:'落地'}[player.state];
+    const motionText=stateText+' · '+player.speed.toFixed(1)+' m/s';
+    if(motionText!==lastMotion){lastMotion=motionText;onGame({type:'locomotion',text:motionText,state:player.state});}
     const observe=nearest(),tree=nearest(true);
     const signature=(observe?.type??'')+'|'+(tree?.type??'');
     if(signature!==nearKey){nearKey=signature;onNearby({observe,tree});}
@@ -733,7 +723,11 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
       schedule();
     },
     move(key,on){if(on)movement.add(key);else movement.delete(key);schedule();},
-    clearMovement(){movement.clear();},
+    jump(on=true){if(!playing||!player)return;if(on)requestJump(player);else releaseJump(player);schedule();},
+    steer(side,forward){analog={side,forward};schedule();},
+    toggleRun(){runLatch=!runLatch;schedule();return runLatch;},
+    recenter(){if(player)yaw=player.a;pitch=.30;schedule();},
+    clearMovement,
     canPlace(o){
       const r=animalRadius(o),kind=typeOf(o);
       return land.userData.navigation.valid(o.x,o.z,r,kind)&&crowd.fits(o.x,o.z,r,kind,objects.get(o.id)?.agent);
