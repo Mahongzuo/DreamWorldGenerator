@@ -22,7 +22,7 @@ const lighting = {
   night:{sky:'#8fbaff',ground:'#627990',ambient:1.17,sun:'#99bcff',power:1.02,exposure:1.10,position:[9,15,-6],glass:1.28}
 };
 
-export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=()=>{}) {
+export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=()=>{},wantsAudio=()=>false) {
   const modest=matchMedia('(pointer: coarse)').matches||(navigator.deviceMemory??8)<=4||(navigator.hardwareConcurrency??8)<=4;
   let quality=modest?'low':'balanced';
   const renderer=new T.WebGLRenderer({antialias:true,alpha:true,powerPreference:'high-performance'});
@@ -548,11 +548,14 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     playerBody.x=player.x;playerBody.z=player.z;playerBody.y=player.y;playerBody.h=CHARACTER.height;crowd.update(playerBody);
   }
   function clearMovement(){movement.clear();analog={side:0,forward:0};runLatch=false;stopCharacter(player);onGame({type:'controls-reset'});}
+  let waterSoundClock = 0;
   function walk(dt){
     if(!player||!land)return;
     if(world.game?.mode==='adventure'&&world.game.health<=0){clearMovement();return;}
     const forward=Number(movement.has('forward'))-Number(movement.has('back'))+analog.forward;
     const side=Number(movement.has('right'))-Number(movement.has('left'))+analog.side;
+    const previousPhase = player.phase, wasGrounded = player.grounded;
+    const previousTraversal = player.traversal;
     stepCharacter(player,{forward,side,yaw,run:movement.has('run')||runLatch,walk:movement.has('walk')},dt,land.userData.navigation,crowd,playerBody);
     if(region?.continuous){
       const [x,z]=regionAt(player.x,player.z);
@@ -566,6 +569,33 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     avatar.group.position.set(player.x,player.y,player.z);
     avatar.group.rotation.y=player.a;
     const nav=land.userData.navigation;
+    if (dt && wantsAudio()) {
+      const field = land.userData.field;
+      if ((!wasGrounded && player.grounded) || previousTraversal && !player.traversal && player.grounded) {
+        onGame({type:'sound', name:'land', strength:Math.min(1.4,.55 + player.landingImpact*.08)});
+      } else if (!previousTraversal && player.traversal) {
+        onGame({type:'sound', name:'vault', strength:.7});
+      } else if (player.grounded && player.speed > .25 && Math.floor(previousPhase/Math.PI) !== Math.floor(player.phase/Math.PI)) {
+        const surface = nav.surfaceAt(player.x,player.z,.02,player.y)[0]?.object.type;
+        const paint = field.paint(player.x,player.z);
+        const onBridge = nav.height(player.x,player.z) - field.height(player.x,player.z) > .09;
+        const name = surface === 'timber-platform' || onBridge ? 'wood' :
+          surface || paint === 'stonepath' || paint === 'paving' ? 'stone' : paint === 'dirtpath' ? 'dirt' : 'grass';
+        onGame({type:'sound', name, strength:.55 + Math.min(.48,player.speed*.085)});
+      }
+      waterSoundClock -= dt;
+      if (waterSoundClock <= 0) {
+        waterSoundClock = .36;
+        let level = field.depth(player.x,player.z);
+        for (const distance of [1.4,3.4,5.4]) {
+          for (let i=0;i<8;i++) {
+            const angle = i*Math.PI/4;
+            level = Math.max(level,field.depth(player.x+Math.cos(angle)*distance,player.z+Math.sin(angle)*distance)*(1-distance/6.5));
+          }
+        }
+        onGame({type:'water-sound',level:Math.min(1,level)});
+      }
+    }
     player.footHeights=[-1,1].map(side=>{const x=player.x+Math.cos(player.a)*side*.125,z=player.z-Math.sin(player.a)*side*.125;return T.MathUtils.clamp(nav.support(x,z,.04,player.y+.32)-player.y,-.22,.27);});
     avatar.pose(player.t,player.speed>.07,player.swing,player.weapon,player,dt);
     const blend=dt?1-Math.exp(-dt*22):1;

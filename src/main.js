@@ -1,10 +1,11 @@
+import {createGameAudio, soundtracks} from './game-audio.js';
 import {isTraversable,traversalTypes} from './traversal-shapes.js';
 import {normalizeGame,buildingCost,spend,craft,recipes,costText,rewardDefeat,visit,hurt,respawn,gather,quest} from './gameplay.js';
 import {sceneDesigns,appendScene} from './scene-presets.js';
 import {connectScene} from './scene-connections.js';
 import './style.css';
 import {icon} from './icons.js';
-import {catalog, items, themes, preset, inside, footprint, clamp, round, loadWorld, worldLink, STORE_KEY, ATLAS_KEY, MAX_OBJECTS, MAX_STROKES, MAX_POINTS, biomeOf, biomes, normalize, tileKey, waterAnimal, wildTile} from './sandbox-state.js';
+import {catalog, items, themes, preset, inside, footprint, clamp, round, loadWorld, worldLink, STORE_KEY, ATLAS_KEY, LAND, MAX_OBJECTS, MAX_STROKES, MAX_POINTS, biomeOf, biomes, normalize, tileKey, waterAnimal, wildTile} from './sandbox-state.js';
 import {createViewport} from './viewport.js';
 import {TERRITORY_KEY, joinRegions, appendRegion, normalizeTerritory, territoryEnvelope, sliceRegion, contains, regionAt} from './territory.js';
 import {packThumbnail,preloadModelPack} from './model-pack.js';
@@ -209,6 +210,19 @@ document.querySelector('#app').innerHTML=`
     <div class="game-top"><label>玩法 <select id="game-mode" aria-label="游戏模式"><option value="creative">创造 · 自由建造</option><option value="adventure">冒险 · 采集与战斗</option></select></label><strong id="game-stats"></strong></div>
     <div id="adventure-tools" hidden><p id="game-quest"></p><button class="btn" id="camp-revive" type="button" hidden>返回营地复活 · 损失 20% 木石</button><div class="craft-row"><button class="btn" id="craft-sword" type="button">石刃剑 · 4 木 / 5 石</button><button class="btn" id="craft-pickaxe" type="button">石镐 · 5 木 / 3 石</button><button class="btn" id="craft-heal" type="button">补给 +40 HP · 3 木 / 1 石</button></div><small>漫步时 J 攻击 · F 伐木 · G 采矿 / 拆除 / 挖土 · R 倒下后复活。冒险行动即时存档，不支持撤销；切换模式保留资源。</small></div>
   </section>
+  <section class="audio-panel" aria-label="游戏声音">
+    <div class="audio-bar">
+      <button type="button" class="btn" id="audio-toggle" aria-pressed="false">开启声音</button>
+      <span id="audio-status" role="status">声音已关闭</span>
+    </div>
+    <details>
+      <summary>曲目与音量</summary>
+      <div class="audio-settings">
+        <label>背景音乐 <select id="audio-track"><option value="auto">随场景切换</option>${Object.entries(soundtracks).map(([id,name])=>`<option value="${id}">${name}</option>`).join('')}<option value="none">关闭配乐</option></select></label>
+        ${[['music','配乐音量'],['ambient','环境音量'],['effects','音效音量']].map(([key,name])=>`<label>${name}<input id="audio-${key}" type="range" min="0" max="100" step="1"></label>`).join('')}
+      </div>
+    </details>
+  </section>
   <div class="studio">
     <section class="viewer" aria-label="自由建造沙盘">
       <div class="viewbar">
@@ -390,6 +404,7 @@ function startExploring(x,z){
   stage.focus({preventScroll:true});
 }
 function endExploring(){
+  updateSceneAudio();
   clearStick();viewport?.endWalk();
   observedType=null;
   strike=null;
@@ -414,6 +429,7 @@ function chopNow(){
   if(mode!=='walk')return;
   const target=viewport.chop();
   if(!target)return;
+  audio.play('chop');
   const tag=[rx,rz,world.seed,target.id??'wild-'+target.key,round(target.x),round(target.z)].join('/');
   strike=strike?.tag===tag?{tag,count:strike.count+1}:{tag,count:1};
   if(strike.count<3){announce(`伐木 ${strike.count} / 3 · ${items[target.type].name}`);return;}
@@ -462,25 +478,30 @@ function payFor(o){
  return {...paid,built:paid.built+(items[o.type].brush?0:1)};
 }
 function gameEvent(event){
+ if(event.type==='sound'){audio.play(event.name,event.strength);return;}
+ if(event.type==='water-sound'){audio.setWater(event.level);return;}
  if(event.type==='controls-reset'){byId('sprint').setAttribute('aria-pressed','false');return;}
  if(event.type==='locomotion'){byId('locomotion').textContent=event.text;byId('locomotion').dataset.state=event.state;return;}
  if(event.type==='status'){if(world.game.mode==='adventure'&&world.game.health>0)byId('combat-note').textContent=event.text;return;}
  if(world.game.mode!=='adventure')return;
  if(event.type==='defeat'){
+  audio.play('reward');
   setGame(rewardDefeat(world.game,event.id));announce('击败荒晶守卫 · 晶石 +2 · 石料 +2');
  }else if(event.type==='hurt'){
   const now=performance.now();if(now-lastHurt<1000||world.game.health<=0)return;lastHurt=now;
+  audio.play('hit');
   setGame(hurt(world.game,event.damage));stage.classList.add('was-hit');setTimeout(()=>stage.classList.remove('was-hit'),350);
  }
 }
 function attackNow(){
  if(mode!=='walk'||world.game.mode!=='adventure')return;
- const result=viewport.attack();if(result?.hp>0)announce(`击中守卫 · 剩余生命 ${result.hp}/60`);
+ const result=viewport.attack();if(result?.hp>0){audio.play('hit');announce(`击中守卫 · 剩余生命 ${result.hp}/60`);}
 }
 function mineNow(){
  if(mode!=='walk')return;const target=viewport.strikeTarget();if(!target)return;
  const tag=target.id??`ground:${round(target.x)}:${round(target.z)}`;
  if(target.kind==='ground'&&world.strokes.some(s=>s.type==='basin'&&strokeDistance(target,s)<1.5)){announce('这里已经挖过，换一处地面');return;}
+ audio.play(target.kind==='ground'?'dig':target.kind==='wood'?'chop':'mine');
  mineStrike=mineStrike?.tag===tag?{tag,count:mineStrike.count+1}:{tag,count:1};
  const hits=world.game.mode==='creative'?1:target.kind==='house'?6:world.game.pickaxe?2:4;
  if(mineStrike.count<hits){announce(`${target.kind==='ground'?'挖土':items[target.type].name} ${mineStrike.count}/${hits}`);return;}
@@ -590,6 +611,7 @@ function sync(){
   if(open&&!world.regions[tileKey(rx,rz)]){rx=rz=0;viewport?.focusRegion(0,0);}
   nextId=Math.max(0,...world.objects.map(o=>o.id),...world.strokes.map(o=>o.id))+1;
   const meta=world.regions?.[tileKey(rx,rz)]??world,biome=biomes[biomeOf(meta)];
+  updateSceneAudio(meta);
   byId('plot-title').textContent=plotName(world.regions?.[tileKey(rx,rz)]??world);
   byId('biome-name').textContent=sceneDesigns[meta.scene]?.name??biome.label;
   byId('biome-detail').textContent=sceneDesigns[meta.scene]?.ecology??biome.detail;
@@ -649,6 +671,7 @@ function travel(dx,dz,follow=false){
   if(!claimed(x,z))return;
   rx=x;rz=z;
   const meta=world.regions[tileKey(rx,rz)],biome=biomes[biomeOf(meta)];
+  updateSceneAudio(meta);
   byId('biome-name').textContent=sceneDesigns[meta.scene]?.name??biome.label;byId('biome-detail').textContent=sceneDesigns[meta.scene]?.ecology??biome.detail;
   byId('plot-title').textContent=plotName(meta);byId('seed-tag').textContent='SEED '+meta.seed;
   if(!follow){cancelDraft();viewport?.focusRegion(rx,rz);}
@@ -835,6 +858,7 @@ function up(p){
     const game=payFor(current.stroke);if(!game)return;
     record(current.stroke.type);
     commit({...world,game,strokes:[...world.strokes,current.stroke]});
+    audio.play('build',.65);
     return;
   }
   const o=p&&(current.kind!=='move'||Math.hypot(p.x-current.start.x,p.z-current.start.z)>.13)?dragShape(p):current.object;
@@ -844,6 +868,7 @@ function up(p){
     if(items[o.type].category!=='animal')record(o.type);
     const game=payFor(o);if(!game)return;
     commit({...world,game,objects:[...world.objects,o]});
+    audio.play('build');
     announce(items[o.type].name+'已建好');
   } else if(JSON.stringify(o)!==JSON.stringify(current.object)) updateObject(o);
 }
@@ -880,7 +905,39 @@ function onInput(kind,p){
   }
 }
 
-try{viewport=createViewport(stage,text=>{byId('metrics').textContent=text;},onInput,travel,updateNearby,gameEvent);}
+const audio = createGameAudio(status => { byId('audio-status').textContent = status; });
+function renderAudioToggle() {
+  const enabled = audio.settings.enabled;
+  byId('audio-toggle').setAttribute('aria-pressed', String(enabled));
+  byId('audio-toggle').textContent = enabled ? '静音' : '开启声音';
+}
+renderAudioToggle();
+if (audio.settings.enabled) byId('audio-status').textContent = '点击或按键后恢复声音';
+byId('audio-toggle').addEventListener('click', () => {
+  audio.configure({ enabled: !audio.settings.enabled });
+  updateSceneAudio();
+  renderAudioToggle();
+});
+byId('audio-track').value = audio.settings.track;
+byId('audio-track').addEventListener('change', event => audio.configure({ track: event.target.value }));
+for (const key of ['music', 'ambient', 'effects']) {
+  const slider = byId('audio-' + key);
+  slider.value = audio.settings[key];
+  slider.addEventListener('input', () => audio.configure({ [key]: slider.valueAsNumber }));
+}
+for (const event of ['click', 'keydown']) {
+  document.addEventListener(event, () => { void audio.unlock(); }, { once: true, capture: true });
+}
+
+function updateSceneAudio(meta = world.regions?.[tileKey(rx,rz)] ?? world) {
+  if (!audio.settings.enabled) return;
+  const x = open ? rx * LAND.x * 2 : 0;
+  const z = open ? rz * LAND.z * 2 : 0;
+  const hasWater = world.strokes.some(stroke => items[stroke.type]?.category === 'water' &&
+    stroke.p.some(([px,pz]) => Math.abs(px-x) <= LAND.x && Math.abs(pz-z) <= LAND.z));
+  audio.setScene(meta, world.light, hasWater ? .5 : 0);
+}
+try{viewport=createViewport(stage,text=>{byId('metrics').textContent=text;},onInput,travel,updateNearby,gameEvent,()=>audio.settings.enabled);}
 catch(error){
   console.error(error);
   stage.insertAdjacentHTML('afterbegin','<div class="render-error">当前浏览器无法启动 WebGL 2。<br>请使用启用硬件加速的浏览器打开沙盘。</div>');
@@ -1010,7 +1067,7 @@ byId('respawn').addEventListener('click',respawnNow);
 byId('camp-revive').addEventListener('click',respawnNow);
 byId('game-mode').addEventListener('change',e=>{cancelDraft();mineStrike=strike=null;setGame({...world.game,mode:e.target.value});renderInspector();announce(e.target.value==='adventure'?'冒险开始 · 放置探访者去采集与探索':'已切换创造模式 · 自由建造');});
 for(const id of Object.keys(recipes))byId('craft-'+id).addEventListener('click',()=>{
- const next=craft(world.game,id);if(!next){announce('材料不足，或已经装备 / 生命已满');return;}setGame(next);announce('已制作 '+recipes[id].name);
+ const next=craft(world.game,id);if(!next){announce('材料不足，或已经装备 / 生命已满');return;}setGame(next);audio.play('reward',.75);announce('已制作 '+recipes[id].name);
 });
 byId('jump').addEventListener('pointerdown',e=>{e.preventDefault();e.currentTarget.setPointerCapture(e.pointerId);viewport?.jump(true);});
 for(const type of ['pointerup','pointercancel','lostpointercapture'])byId('jump').addEventListener(type,()=>viewport?.jump(false));
