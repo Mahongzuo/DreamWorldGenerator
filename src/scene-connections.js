@@ -1,4 +1,5 @@
 import {items,inFootprint,tileShift,LAND} from './sandbox-state.js';
+import {layoutGuide} from './layout-guide.js';
 import {createRoadCoverage, crossSection, isRoadPaint, smoothPoints} from './road-coverage.js';
 export const channel=s=>isRoadPaint(s.type)?'road':items[s.type]?.category==='water'?'river':null;
 export function distanceToStroke(x,z,s){
@@ -111,7 +112,7 @@ export function neighborPorts(world,x,z){
 }
 // Small bounded grid search bends new corridors around authored buildings.
 function route(start,target,objects,width){
- const blocked=(x,z)=>objects.some(o=>items[o.type].category==='house'&&items[o.type].form!=='bridge'&&inFootprint(x,z,o,width/2+.45));
+ const blocked=(x,z)=>objects.some(o=>inFootprint(x,z,o,width/2+.45));
  const points=[];for(let x=-14;x<=14;x++)for(let z=-10;z<=10;z++)if(!blocked(x,z))points.push([x,z]);
  const nearest=p=>points.reduce((best,q)=>!best||Math.hypot(q[0]-p[0],q[1]-p[1])<Math.hypot(best[0]-p[0],best[1]-p[1])?q:best,null);
  const a=nearest(start),b=nearest(target);if(!a||!b)return [start,target];
@@ -127,6 +128,9 @@ function route(start,target,objects,width){
 }
 export function connectScene(world,local,x,z){
  const [sx,sz]=tileShift(x,z),ports=neighborPorts(world,x,z),strokes=local.strokes.map(s=>({...s,p:s.p.map(p=>[...p])}));
+ const layout=local.generation?.layout??Object.keys(layoutGuide[local.scene]??{})[0];
+ const landmark=layoutGuide[local.scene]?.[layout]?.landmark;
+ const obstacles=local.objects.filter(o=>o.type===landmark || items[o.type].category==='house'&&items[o.type].form!=='bridge');
  const localPorts=ports.map(p=>({...p,p:[p.p[0]-sx,p.p[1]-sz],anchor:[p.anchor[0]-sx,p.anchor[1]-sz]}));
  // Move an exposed endpoint onto the incoming channel before drawing the joining curve.
  for(const s of strokes){const kind=channel(s);if(!kind)continue;
@@ -134,24 +138,26 @@ export function connectScene(world,local,x,z){
    const p=s.p[i],dx=Math.abs(p[0])>14.8?Math.sign(p[0]):0,dz=!dx&&Math.abs(p[1])>11.2?Math.sign(p[1]):0;
    if(!dx&&!dz||!world.regions[`${x+dx},${z+dz}`])continue;
    const candidates=localPorts.filter(q=>q.kind===kind&&q.dx===dx&&q.dz===dz).sort((a,b)=>Math.hypot(a.p[0]-p[0],a.p[1]-p[1])-Math.hypot(b.p[0]-p[0],b.p[1]-p[1]));
-   if(candidates.length)s.p[i]=[...candidates[0].p];else s.p[i]=[p[0]-dx*3,p[1]-dz*3];
+   if(candidates.length&&Math.hypot(candidates[0].p[0]-p[0],candidates[0].p[1]-p[1])<=2)s.p[i]=[...candidates[0].p];else s.p[i]=[p[0]-dx*3,p[1]-dz*3];
   }
  }
  let id=Math.max(0,...local.objects.map(o=>o.id),...strokes.map(s=>s.id))+1;
  for(const port of localPorts){
   const start=[port.p[0]-port.dx*2,port.p[1]-port.dz*2];
   const networks=strokes.filter(s=>channel(s)===port.kind);
-  const candidates=networks.map(s=>({...distanceToStroke(...start,s),s})).sort((a,b)=>a.distance-b.distance);
-  let target=candidates[0]?.point;
+  const clearTarget=p=>!obstacles.some(o=>inFootprint(...p,o,port.w/2+.45));
+  const connections=networks.flatMap(s=>[distanceToStroke(...start,s).point,...s.p]);
+  const candidates=connections.filter(clearTarget).sort((a,b)=>Math.hypot(a[0]-start[0],a[1]-start[1])-Math.hypot(b[0]-start[0],b[1]-start[1]));
+  let target=candidates[0];
   if(!target)target=[-port.dx*10+(port.dx?0:port.p[0]),-port.dz*8+(port.dz?0:port.p[1])];
   // Keep an actual overlap on both sides of the seam; width/type come from the old design.
-  const p=[port.anchor,port.p,...route(start,target,local.objects,port.w)];
+  const p=[port.anchor,port.p,...route(start,target,obstacles,port.w)];
   strokes.push({id:id++,type:port.type,w:port.w,p});
  }
  // New structures yield to connection corridors; existing construction is never moved.
  const corridors=strokes.slice(local.strokes.length).filter(s=>channel(s));
  const objects=local.objects.filter(o=>{
-  if(items[o.type].category==='animal'||items[o.type].form==='bridge')return true;
+  if(o.type===landmark||items[o.type].category==='animal'||items[o.type].form==='bridge')return true;
   return !corridors.some(s=>{
    const {distance,point}=distanceToStroke(o.x,o.z,s);
    const margin=channel(s)==='river'?s.w/2+.35:s.w/2+.1;

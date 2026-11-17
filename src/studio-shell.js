@@ -47,9 +47,9 @@ export function studioMarkup({views,sceneDesigns,themes,soundtracks,seasonOption
     </section>
   </main>
   <dialog id="scene-dialog">${dialogTitle('场景与领地')}
-    <section class="dialog-section"><h3>生成到相邻领地</h3><label>完整场景<select id="theme">${Object.entries(sceneDesigns).map(([k,v])=>`<option value="scene:${k}">${v.name}</option>`).join('')}</select></label><div class="scene-summary" id="scene-summary"></div>
-      <details class="fold"><summary>大小、密度与布局</summary><div class="scene-controls form-grid" id="scene-controls">
-        <label id="layout-field">水乡布局<select id="scene-layout"><option value="auto">随种子变化</option><option value="canal">沿河水巷</option><option value="court">围池庭院</option></select></label><label>场景宽度<select id="scene-width">${options({1:'30 米 · 1 块',2:'60 米 · 2 块',3:'90 米 · 3 块'})}</select></label><label>场景纵深<select id="scene-height">${options({1:'23 米 · 1 块',2:'46 米 · 2 块',3:'68 米 · 3 块'})}</select></label><label>建筑密度<select id="scene-density"><option value=".5">疏朗</option><option value="1" selected>适中</option><option value="1.5">紧凑</option></select></label><label>每块植物数<input type="number" id="scene-plants" min="0" max="36" value="12"></label>
+    <section class="dialog-section"><h3>生成到相邻领地</h3><label>完整场景<select id="theme">${Object.entries(sceneDesigns).map(([k,v])=>`<option value="scene:${k}">${v.name}</option>`).join('')}</select></label><label id="layout-field">布局<select id="scene-layout"></select></label><div class="scene-summary" id="scene-summary"></div>
+      <details class="fold"><summary>大小、密度与种子</summary><div class="scene-controls form-grid" id="scene-controls">
+        <label>场景宽度<select id="scene-width">${options({1:'30 米 · 1 块',2:'60 米 · 2 块',3:'90 米 · 3 块'})}</select></label><label>场景纵深<select id="scene-height">${options({1:'23 米 · 1 块',2:'46 米 · 2 块',3:'68 米 · 3 块'})}</select></label><label>建筑密度<select id="scene-density"><option value=".5">疏朗</option><option value="1" selected>适中</option><option value="1.5">紧凑</option></select></label><label>每块植物数<input type="number" id="scene-plants" min="0" max="36" value="12"></label>
         <label>布局种子<input id="scene-seed" maxlength="14"></label><button type="button" class="btn" id="scene-reroll">换个布局</button><label class="check-line"><input type="checkbox" id="seed-lock">固定种子</label></div></details>
       <p id="append-policy" class="policy"></p><button class="btn primary" type="button" id="load-theme">追加场景</button><small id="last-generation"></small>
     </section>

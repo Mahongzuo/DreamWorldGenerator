@@ -1,4 +1,4 @@
-export const shoreSpecies = {frog:'池蛙', kingfisher:'翠鸟'};
+export const shoreSpecies = {frog:'池蛙', kingfisher:'翠鸟', dipper:'白喉河乌', 'meadow-hare':'欧洲野兔', 'sea-gull':'海鸥', 'shore-crab':'岸蟹'};
 
 export function normalizeShore(value) {
   const visits = [];

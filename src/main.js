@@ -3,6 +3,7 @@ import {isTraversable,traversalTypes} from './traversal-shapes.js';
 import {cabinRise,MIN_RIDGE_RISE,MAX_RIDGE_RISE} from './cabin-layout.js';
 import {prepareFencePath,moveFenceKnot,fenceHandleIndices} from './fence-path.js';
 import {normalizeGame,buildingCost,canAfford,spend,craft,recipes,costText,rewardDefeat,visit,hurt,respawn,gather,quest} from './gameplay.js';
+import {layoutGuide} from './layout-guide.js';
 import {sceneDesigns,appendScene,createScene} from './scene-presets.js';
 import {installFrontier} from './frontier-ui.js';
 import {studioMarkup} from './studio-shell.js';
@@ -311,7 +312,7 @@ function renderGenerationPolicy(){
   byId('append-policy').textContent=`免费增加 ${count} 块（${count*684} 平方米），与现有世界相连。 ${saving}`;
   byId('replace-policy').textContent=`替换地块 (${rx}, ${rz}) 内的物件与笔迹，其他地块和跨界笔迹保留。免费。 ${saving}`;
 }
-const featuredAssets=new Set(['water-stilt','build-covered-bridge','shore-stones','reeds','water-lily','kingfisher','frog']);
+const featuredAssets=new Set(['water-stilt','build-covered-bridge','shore-stones','reeds','water-lily','kingfisher','frog','watermill','pasture-shelter','build-lighthouse','tidal-rocks','dipper','meadow-hare','sea-gull','shore-crab']);
 function assetRank(id){return featuredAssets.has(id)?2:packThumbnail(id)?1:0;}
 function renderCatalog(){
   const candidates=[...views[category].types.flatMap(key=>catalog[key].items.map(([id])=>items[id])),...(category==='terrain'?catalog.decor.items.filter(([id])=>id.startsWith('nature-')).map(([id])=>items[id]):[])].sort((a,b)=>assetRank(b.id)-assetRank(a.id));
@@ -388,8 +389,7 @@ function observeNow(){
   if(target.wildVisitor){
     const game=world.game,next=recordShoreVisit(game,target);
     if(next!==game){
-      const speciesCount=shore=>new Set(shore?.visits.map(v=>v.type)).size;
-      shoreMessage=speciesCount(game.shore)<2&&speciesCount(next.shore)===2?'水岸来客 · 两种来客均已记入游记':items[target.type].name+' · 已记入水岸游记';
+      shoreMessage=items[target.type].name+' · 已记入本世界游记';
       setGame(next);
     }
   }
@@ -428,7 +428,7 @@ function chopNow(){
   }
 }
 function newSceneSeed(){return 'LAND-'+crypto.getRandomValues(new Uint32Array(1))[0].toString(36).toUpperCase();}
-function sceneSettings(){return {layout:byId('theme').value==='scene:garden'?byId('scene-layout').value:undefined,width:+byId('scene-width').value,height:+byId('scene-height').value,density:+byId('scene-density').value,plants:+byId('scene-plants').value,seed:byId('scene-seed').value||newSceneSeed()};}
+function sceneSettings(){return {layout:byId('scene-layout').value,width:+byId('scene-width').value,height:+byId('scene-height').value,density:+byId('scene-density').value,plants:+byId('scene-plants').value,seed:byId('scene-seed').value||newSceneSeed()};}
 function renderGame(){
  const g=world.game;if(!g)return;
  const rulesButton=byId('settings-open'),ruleName=g.mode==='adventure'?'冒险':'创造';
@@ -447,7 +447,7 @@ function renderGame(){
  byId('craft-pickaxe').textContent=g.pickaxe?'石镐已装备':'石镐 · 5 木 / 3 石';
  if(g.mode==='adventure'&&g.health<=0)byId('combat-note').textContent='已倒下 · 按 R 返回起点营地（损失 20% 木材和石料）';
  if(g.mode!=='adventure')byId('combat-note').textContent='';
- showJournalCount();updateNearby(nearby);habitatPanel?.setGame(g);renderGenerationPolicy();updateBuildbar();
+ showJournalCount();updateNearby(nearby);habitatPanel?.setGame(g,(world.regions?.[tileKey(rx,rz)]??world).scene);renderGenerationPolicy();updateBuildbar();
 }
 function setGame(game){
  if(game===world.game)return;
@@ -605,7 +605,8 @@ function syncTerritory(){
 }
 const plotName=meta=>{
   const layout=meta.generation?.layout??(meta.seed==='WATERLANE'?'canal':null);
-  if(meta.scene==='garden'&&layout)return layout==='court'?'江南 · 围池庭院':'江南 · 沿河水巷';
+  const variant=layoutGuide[meta.scene]?.[layout];
+  if(variant)return ({garden:'江南',village:'村庄',coast:'海岸'})[meta.scene]+' · '+variant.name;
   return sceneDesigns[meta.scene]?.name??themes[meta.theme].label;
 };
 function sync(){
@@ -684,6 +685,7 @@ function travel(dx,dz,follow=false){
   if(!follow){cancelDraft();viewport?.focusRegion(rx,rz);}
   syncTerritory();byId('atlas-coord').textContent=`视野 ${rx}, ${rz}`;
   rememberLocation();
+  habitatPanel.setGame(world.game,meta.scene);
   frontier?.sync(mode);
   if(mode==='walk'&&world.game.mode==='adventure')setGame(visit(world.game,tileKey(rx,rz)));
 }
@@ -1083,13 +1085,18 @@ document.querySelector('.environment').addEventListener('click',e=>{
   commit({...world,[b.dataset.world]:b.dataset.value});
 });
 function renderSceneSummary(){
-  const design=sceneDesigns[byId('theme').value.slice(6)];
-  byId('layout-field').hidden=byId('theme').value!=='scene:garden';
-  if(!design)return;
+  const id=byId('theme').value.slice(6),base=sceneDesigns[id],select=byId('scene-layout');
+  if(!base)return;
+  if(select.dataset.scene!==id){
+    select.dataset.scene=id;
+    select.innerHTML='<option value="auto">随种子变化</option>'+Object.entries(layoutGuide[id]).map(([key,v])=>`<option value="${key}">${v.name}</option>`).join('');
+  }
+  const design={...base,...layoutGuide[id][select.value]};
   byId('scene-summary').innerHTML=`<div class="scene-miniatures">${design.preview.map(id=>`<img src="${packThumbnail(id)}" alt="${items[id].name}">`).join('')}</div><p>${design.description}</p>`;
   renderGenerationPolicy();
 }
 byId('theme').addEventListener('change',renderSceneSummary);
+byId('scene-layout').addEventListener('change',renderSceneSummary);
 byId('theme').value='scene:garden';byId('scene-seed').value=newSceneSeed();renderSceneSummary();
 byId('scene-reroll').addEventListener('click',()=>{byId('scene-seed').value=newSceneSeed();announce('已更换布局种子，点击追加场景');});
 byId('load-theme').addEventListener('click',()=>{

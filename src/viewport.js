@@ -126,7 +126,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     },
     removeModel:disposeGroup,
     paintModel(group,pose){
-      group.position.set(pose.x,pose.y,pose.z);group.rotation.y=pose.heading;
+      group.position.set(pose.x,pose.y,pose.z);group.rotation.y=pose.heading+(pose.type==='shore-crab'?Math.PI/2:0);
       setModelDetail(group,pose.detail);
       animatePackModel(group,{delta:pose.delta,motion:pose.motion,phase:pose.phase});
     },
@@ -591,7 +591,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
       nav.height(a.x,a.z)+(deerPose||group.userData.packModel?0:Math.abs(Math.sin(a.travel*17))*.026*gait);
     a.y=y;a.h=modelHeight(o)??Math.max(.35,o.w*1.2);
     group.position.set(a.x,y,a.z);
-    group.rotation.set(0,a.heading,a.kind==='fly'?Math.sin(t*3+a.seed)*.19:0);
+    group.rotation.set(0,a.heading+(o.type==='shore-crab'?Math.PI/2:0),a.kind==='fly'?Math.sin(t*3+a.seed)*.19:0);
     deerPose?.(a,hoofGround(nav,a,y,o.w/.8));
   }
   let detailClock=0;
@@ -630,7 +630,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
       }
       entry.poseDebt=(entry.poseDebt??0)+dt;
       if(entry.poseDebt>=(entry.onScreen===false?.16:quality==='low'?1/22:1/40)){
-        animatePackModel(entry.group,{delta:entry.poseDebt,speed:a?.speed??0,travel:a?.travel??0,time,motion:o.type==='kingfisher'?'Fly':undefined});
+        animatePackModel(entry.group,{delta:entry.poseDebt,speed:a?.speed??0,travel:a?.travel??0,time,motion:a?.kind==='fly'?'Fly':o.type==='shore-crab'&&a?.speed>.045?'Scuttle':undefined});
         entry.poseDebt=0;
       }
       for(const spinner of entry.spinners)spinner.rotation.z-=dt*spinner.userData.spin;

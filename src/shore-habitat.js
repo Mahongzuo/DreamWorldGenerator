@@ -1,11 +1,13 @@
 import {items, LAND} from './sandbox-state.js';
+import {addRegionalHabitats,localRegionalChecks} from './regional-habitats.js';
 import {randFrom} from './model.js';
 import {modelDefinitions} from './asset-registry.js';
 
 const directions = Array.from({length:16},(_,i) => [Math.cos(i*Math.PI/8),Math.sin(i*Math.PI/8)]);
 const reeds = new Set(['reeds','cattail']);
 const perches = new Set(['shore-stones','willow','nature-willow']);
-export const visitorRadius = {frog:modelDefinitions.frog.radius,kingfisher:modelDefinitions.kingfisher.radius};
+export const visitorTypes=['frog','kingfisher','dipper','meadow-hare','sea-gull','shore-crab'];
+export const visitorRadius=Object.fromEntries(visitorTypes.map(id=>[id,modelDefinitions[id].radius]));
 
 const openPool = (field,x,z) => [[0,0],[.56,0],[-.56,0],[0,.56],[0,-.56]]
   .every(([dx,dz]) => field.depth(x+dx,z+dz) >= .68);
@@ -95,9 +97,10 @@ export function createShoreSurvey() {
         cached.season===world.season && unchanged(cached.objects,objects) && unchanged(cached.strokes,strokes) &&
         unchanged(cached.nearbyRegions,nearbyRegions))return cached;
     const anchors=objects.filter(o => (reeds.has(o.type)||perches.has(o.type))&&o.x>=left&&o.x<=right&&o.z>=top&&o.z<=bottom);
-    const result={waterChecks:new Map(),center,seed:world.seed,season:world.season,nearbyRegions,objects,strokes,anchors,options:{frog:[],kingfisher:[]},
+    const result={waterChecks:new Map(),center,seed:world.seed,season:world.season,nearbyRegions,objects,strokes,anchors,options:Object.fromEntries(visitorTypes.map(type=>[type,[]])),
       waters:strokes.filter(s=>items[s.type]?.category==='water')};
     addNearPlants(world,field,nav,result);
+    addRegionalHabitats(result,field,nav,visitorRadius,[left,right,top,bottom]);
     cached=result;
     return result;
   }
@@ -120,10 +123,12 @@ export function shoreReport(survey,field,nav,focus) {
   const results={};
   let bank;
   const waterKey=water?Math.floor(water.x/2)+','+Math.floor(water.z/2):null;
-  for(const type of ['frog','kingfisher']) {
+  for(const type of visitorTypes) {
     const nearest=survey.options[type].reduce((best,s) => !best || distanceTo(s.at,focus)<distanceTo(best.at,focus)?s:best,null);
     if(nearest && distanceTo(nearest.at,focus)<=10**2) results[type]=nearest;
-    else {
+    else if(type!=='frog' && type!=='kingfisher'){
+      results[type]={type,checks:localRegionalChecks(type,field,focus.x,focus.z),ready:false};
+    } else {
       if (water && !bank){
         bank=survey.waterChecks.get(waterKey);
         if(!bank){

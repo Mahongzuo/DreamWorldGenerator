@@ -1,0 +1,44 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>村庄与海岸的来客</title>
+<h1>连续地形中的四种来客</h1><pre id="result">正在生成地形…</pre>
+<script type="module">
+import {createScene} from '../src/scene-presets.js';
+import {createContinuousLand} from '../src/continuous-land.js';
+import {joinRegions} from '../src/territory.js';
+import {createKit,disposeGroup} from '../src/model.js';
+import {createAnimalCrowd,makeWander} from '../src/navigation.js';
+import {createShoreVisitors} from '../src/shore-visitors.js';
+import {animalProfile} from '../src/animal-behavior.js';
+import {items,waterAnimal,flyingAnimal} from '../src/sandbox-state.js';
+const cases=[
+  ['village','mill','watermill','dipper'],
+  ['village','pasture','pasture-shelter','meadow-hare'],
+  ['coast','beacon','build-lighthouse','sea-gull'],
+  ['coast','tidepool','tidal-rocks','shore-crab']
+];
+const results=[],status=document.querySelector('#result');
+try{
+  for(const seed of ['FERRY','MARSH'])for(const [scene,layout,anchor,type] of cases){
+    const plot=createScene(scene,{layout,seed,density:1,plants:12});
+    const world=joinRegions([[0,0,plot]]);
+    const terrain=createContinuousLand(createKit()).update(world,{x:0,z:0},'low');
+    const {field,navigation}=terrain.userData,crowd=createAnimalCrowd();
+    const point=world.objects.find(o=>o.type===anchor);
+    if(!point)throw Error(layout+' 缺少地标');
+    for(const o of world.objects.filter(o=>items[o.type]?.category==='animal')){
+      const profile=animalProfile(o);
+      makeWander(navigation,o.x,o.z,profile.radius,waterAnimal(o)?'water':flyingAnimal(o)?'fly':'land',o.id,2,crowd);
+    }
+    let report,seen=false;
+    const actors=createShoreVisitors({makeModel:()=>({}),paintModel:()=>{},removeModel:()=>{},onReport:r=>report=r});
+    actors.update(world,field,navigation,crowd,{x:0,z:0});actors.watch(point);
+    let seconds=0;
+    for(;seconds<30&&!seen;seconds+=1/30){
+      actors.step(1/30,true,point,true);
+      seen=actors.targets().some(target=>target.type===type&&target.wildVisitor);
+    }
+    if(!seen)throw Error(seed+' '+layout+' '+type+' '+JSON.stringify(report[type]));
+    results.push('PASS '+seed+' '+layout+' '+type+' '+seconds.toFixed(1)+'s');
+    status.textContent=results.join('\n');disposeGroup(terrain);
+  }
+}catch(e){status.textContent=results.concat('FAIL '+e.stack).join('\n');}
+</script></html>

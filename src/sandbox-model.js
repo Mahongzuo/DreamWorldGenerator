@@ -1,3 +1,4 @@
+import {modelDefinitions} from './asset-registry.js';
 import {bridgeFit} from './bridge-fit.js';
 import {resolveCabinLayout} from './cabin-layout.js';
 import {prepareFencePath} from './fence-path.js';
@@ -99,7 +100,14 @@ export function makeField(world,region) {
   for (const o of world.objects) {
     if (items[o.type].category !== 'house'||items[o.type].form==='bridge') continue;
     water.beginPath();
-    footprint(o,.47).forEach(([x,z],i)=>i ? water.lineTo(ox(x),oz(z)) : water.moveTo(ox(x),oz(z)));
+    const model=modelDefinitions[o.type],box=model?.foundationBox;
+    // The mill wheel overhangs the stream. Drain only the scaled and rotated masonry plinth.
+    let foundation=o;
+    if(box){
+      const sx=o.w/model.width,sz=o.d/model.depth,c=Math.cos(o.a),s=Math.sin(o.a);
+      foundation={...o,x:o.x+c*box.x*sx+s*box.z*sz,z:o.z-s*box.x*sx+c*box.z*sz,w:box.w*sx,d:box.d*sz};
+    }
+    footprint(foundation,box ? .08 : .47).forEach(([x,z],i)=>i ? water.lineTo(ox(x),oz(z)) : water.moveTo(ox(x),oz(z)));
     water.closePath();
     water.fill();
   }

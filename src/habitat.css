@@ -8,3 +8,6 @@
 .shore-conditions{display:flex;flex-wrap:wrap;gap:.25rem .7rem;margin-top:.23rem;font-size:.77rem}
 .shore-conditions span{color:#6b6255}.shore-conditions [data-met="true"]{color:#426641}
 .shore-notes{margin-top:.8rem}.shore-notes ul{display:grid;gap:.32rem;list-style:none;margin:.4rem 0;padding:0}.shore-notes li{display:flex;gap:.6rem;align-items:baseline;flex-wrap:wrap}.shore-notes li span{font-size:.76rem;color:#607067}
+.habitat-chapters{display:flex;flex-wrap:wrap;gap:.3rem;margin-top:.6rem}
+.habitat-chapters button{flex:1 0 auto;padding:.48rem .55rem;border:1px solid #cdd9c5;border-radius:.5rem;background:#f6f7ee;color:#485e4d;font:inherit;cursor:pointer}
+.habitat-chapters button[aria-pressed=true]{background:#315642;color:white;border-color:#315642}
