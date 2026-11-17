@@ -19,15 +19,17 @@ export function objectBounds(o,pad=0){
 export function overlapsBounds(a,b){
   return a.x0<=b.x1&&a.x1>=b.x0&&a.z0<=b.z1&&a.z1>=b.z0;
 }
-export function roadEditAreas(old,next){
+export function changedStrokes(old,next){
   if(!old||old.strokes===next.strokes||old.objects!==next.objects||
     ['regions','seed','theme','season','biome','scene','felled'].some(k=>old[k]!==next[k]))return null;
   const before=old.strokes,after=next.strokes;
   let first=0,lastOld=before.length,lastNew=after.length;
   while(first<lastOld&&first<lastNew&&before[first]===after[first])first++;
   while(lastOld>first&&lastNew>first&&before[lastOld-1]===after[lastNew-1]){lastOld--;lastNew--;}
-  const edits=[...before.slice(first,lastOld),...after.slice(first,lastNew)];
-  return edits.length&&edits.every(stroke=>isRoadEdit(stroke.type))?edits.map(stroke=>strokeBounds(stroke)):null;
+  return [...before.slice(first,lastOld),...after.slice(first,lastNew)];
+}
+export function roadEditAreas(old,next,edits=changedStrokes(old,next)){
+  return edits?.length&&edits.every(stroke=>isRoadEdit(stroke.type))?edits.map(stroke=>strokeBounds(stroke)):null;
 }
 export function changedAreas(old,next){
   const areas=[];

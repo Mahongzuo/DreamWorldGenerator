@@ -1,5 +1,5 @@
 import * as T from 'three';
-import {buildLand,makeField,refreshLandRoads} from './sandbox-model.js';
+import {buildLand,makeField,refreshLandRoads,refreshLandFences} from './sandbox-model.js';
 import {disposeGroup} from './model.js';
 import {createNavigation} from './navigation.js';
 import {contains,regionAt,sliceRegion} from './territory.js';
@@ -45,6 +45,25 @@ export function createContinuousLand(kit){
     };
     return colorAt(rx,rz).lerp(colorAt(rx+nx,rz),wx).lerp(colorAt(rx,rz+nz).lerp(colorAt(rx+nx,rz+nz),wx),wz);
   }
+  function tileSignature(local,world,x,z,coarse){
+    return JSON.stringify({...local,objects:local.objects.filter(o=>items[o.type].category!=='animal'),coarse,
+      neighborThemes:[[-1,0],[1,0],[0,-1],[0,1]].map(([dx,dz])=>world.regions[tileKey(x+dx,z+dz)]?.theme)});
+  }
+  function updateFences(world,ids){
+    for(const entry of cache.values()){
+      // A detached tile may still reflect an older terrain edit. Its regular
+      // update will bring everything up to date when it comes back into view.
+      if(entry.world!==current)continue;
+      const {x,z,coarse}=entry.land.userData.region;
+      const local=sliceRegion(world,x,z);
+      if(local.strokes.some(s=>ids.has(s.id))||entry.land.userData.world.strokes.some(s=>ids.has(s.id))){
+        refreshLandFences(kit,entry.land,local,entry.land.userData.region,ids);
+        entry.signature=tileSignature(local,world,x,z,coarse);
+      }
+      entry.world=world;
+    }
+    current=world;
+  }
   function update(world,focus,detail,roadChanges=null){
     const previous=current;
     if(!current||current.regions!==world.regions||current.season!==world.season)fields.clear();
@@ -64,7 +83,7 @@ export function createContinuousLand(kit){
       if(!local)continue;
       wanted.add(key);
       const coarse=detail==='low'||dx!==0||dz!==0;
-      const signature=JSON.stringify({...local,objects:local.objects.filter(o=>items[o.type].category!=='animal'),coarse,neighborThemes:[[-1,0],[1,0],[0,-1],[0,1]].map(([dx,dz])=>world.regions[tileKey(x+dx,z+dz)]?.theme)});
+      const signature=tileSignature(local,world,x,z,coarse);
       let entry=cache.get(key);
       if(entry?.signature!==signature){
         const [sx,sz]=tileShift(x,z),raw=localField(x,z);
@@ -103,5 +122,5 @@ export function createContinuousLand(kit){
     for(const entry of cache.values())disposeGroup(entry.land);
     group.removeFromParent();cache.clear();fields.clear();current=null;
   }
-  return {update,group,clear};
+  return {update,updateFences,group,clear};
 }

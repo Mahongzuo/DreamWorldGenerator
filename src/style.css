@@ -423,6 +423,24 @@ button:hover:not(:disabled) {
 #ridge-handle[hidden]{display:none}
 #ridge-handle:focus-visible{outline:3px solid #285e59;outline-offset:2px}
 @media (pointer:coarse){#ridge-handle{width:44px;height:44px}}
+#fence-handles {
+  position:absolute; inset:0; z-index:1; pointer-events:none;
+}
+.fence-handle {
+  position:absolute; transform:translate(-50%,-50%); display:grid; place-items:center;
+  width:28px; height:28px; padding:0; border:0; background:transparent; border-radius:50%;
+  touch-action:none; pointer-events:auto; cursor:grab;
+}
+.fence-handle::before {
+  content:''; box-sizing:border-box; width:11px; height:11px;
+  border:2px solid #fff3ce; background:#32625a; border-radius:50%;
+  box-shadow:0 0 0 1px #4d513e,0 2px 4px #30271150;
+}
+.fence-handle[data-endpoint=true]::before { width:13px; height:13px; }
+.fence-handle:hover::before,.fence-handle:focus-visible::before,.fence-handle.dragging::before { background:#845a34; }
+.fence-handle:focus-visible { outline:2px solid #32625a; outline-offset:-3px; }
+.fence-handle.dragging { cursor:grabbing; z-index:1; }
+@media (pointer:coarse){.fence-handle{width:40px;height:40px}}
 .stage[data-light=gold] {
   background: radial-gradient(ellipse at 50% 42%,#f7e4c6,#d9c6aa 65%,#b8b39b);
 }

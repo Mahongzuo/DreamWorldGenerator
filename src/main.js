@@ -1,6 +1,7 @@
 import {createGameAudio, soundtracks} from './game-audio.js';
 import {isTraversable,traversalTypes} from './traversal-shapes.js';
 import {cabinRise,MIN_RIDGE_RISE,MAX_RIDGE_RISE} from './cabin-layout.js';
+import {prepareFencePath,moveFenceKnot,fenceHandleIndices} from './fence-path.js';
 import {normalizeGame,buildingCost,canAfford,spend,craft,recipes,costText,rewardDefeat,visit,hurt,respawn,gather,quest} from './gameplay.js';
 import {sceneDesigns,appendScene,createScene} from './scene-presets.js';
 import {installFrontier} from './frontier-ui.js';
@@ -49,7 +50,7 @@ function record(id){
 const labels={summer:'常青',autumn:'秋林',winter:'初雪',day:'白昼',gold:'金暮',night:'月夜'};
 const toolLabels={select:'选择',build:'建造',erase:'橡皮',camera:'漫游'};
 const help={
-  select:'拖动物件可移动，拖建筑四角调整尺寸，拖雪松屋顶的箭头调整屋脊。',
+  select:'点选栅栏可拖控制点改线。拖动物件可移动，拖建筑四角可改尺寸，雪松屋顶的箭头可调屋脊。',
   erase:'在道路上拖动可擦去局部，点其他物件或笔迹可移除。',
   camera:'拖动旋转视角，滚轮或捏合缩放。'
 };
@@ -198,15 +199,22 @@ function announce(text){
   toastTimer=setTimeout(()=>toast.classList.remove('visible'),2300);
 }
 const selectedObject=()=>world.objects.find(o=>o.id===selected);
+const selectedFence=()=>world.strokes.find(s=>s.id===selected&&s.type==='fence');
+function showSelection(){
+  viewport?.showFootprint(mode==='select'?selectedObject():null,true,true);
+  viewport?.showFenceHandles(mode==='select'?selectedFence():null);
+}
 function toolTip(){
   if(mode==='spawn')return '点击地面放置角色，或从预设步道出发。';
   if(mode==='walk')return 'WASD 移动 · Shift 冲刺 · Space 跳跃 / 翻越 / 攀上 · C 慢走 · 拖动看向 · Q 镜头回正 · E 观察 · F 伐木 · G 采矿拆除 · J 攻击 · Esc 返回建造。';
   if(mode!=='build') {
+    if(mode==='select'&&selectedFence())return '拖动端点调整长度，拖动中间的控制点改变栅栏走向。';
     if(mode==='camera'&&open)return matchMedia('(pointer: coarse)').matches?'拖动前往相邻领地，双指旋转或缩放。':'拖动或右键平移，滚轮缩放；中键拖动旋转。';
     return help[mode];
   }
   const o=items[active];
   if(o.id==='road-erase')return '拖过旧路可以擦掉一段，缩小笔宽可以修边。';
+  if(o.id==='fence')return '在地面拖画栅栏。画好后，用「选择」点栏杆或立柱即可改线。';
   if(o.id==='stonepath'||o.id==='dirtpath')return '拖画道路，靠近木屋可以接到门前。按住 Ctrl 拖动可局部擦路。';
   if(o.category==='house') return '在地面拖出轮廓生成建筑，也可单击放置。';
   if(o.brush) return '在地面按住拖画，单击可以盖一个圆形笔印。';
@@ -231,7 +239,7 @@ function showMode(){
   updateBuildbar();
   frontier?.sync(mode);
   viewport?.cameraMode(mode==='camera');
-  viewport?.showFootprint(mode==='select' ? selectedObject() : null,true,true);
+  showSelection();
 }
 function setLibrary(visible){
   libraryOpen=visible;
@@ -263,7 +271,7 @@ function rememberItem(id){
   renderRecents();
 }
 function updateBuildbar(){
-  const selectedItem=mode==='select'?selectedObject():null,def=items[selectedItem?.type??active];
+  const selectedItem=mode==='select'?(selectedObject()??selectedFence()):null,def=items[selectedItem?.type??active];
   const placing=mode==='build',angle=selectedItem?.a??placementAngle;
   const cost=buildingCost(def,selectedItem??{});
   const adventure=world.game.mode==='adventure';
@@ -273,7 +281,7 @@ function updateBuildbar(){
   const meta=byId('placement-meta');
   meta.textContent=placing?(adventure?costText(cost)||'免费调整':def.brush?'拖动绘制':`${def.category==='house'?'拖画轮廓':'点按放置'} · ${Math.round(angle*180/Math.PI)%360}°`):selectedItem?'已选中':'';
   meta.dataset.poor=String(placing&&adventure&&!canAfford(world.game,cost));
-  byId('rotate-tool').hidden=!placing&&!selectedItem;
+  byId('rotate-tool').hidden=!placing&&(!selectedItem||selectedItem.type==='fence');
   byId('rotate-tool').disabled=placing&&Boolean(def.brush);
   byId('continuous-tool').hidden=!placing;
   byId('continuous-tool').setAttribute('aria-pressed',String(continuousPlacement));
@@ -328,7 +336,7 @@ function showJournalCount(){
   byId('wood-count').textContent=world.game?.mode==='adventure'?`生命 ${world.game.health} · 木 ${world.game.wood} · 石 ${world.game.stone}`:'木材 '+journal.wood;
 }
 function renderGuide(){
-  const type=mode==='walk'?(observedType??nearby?.observe?.type??active):selectedObject()?.type??active;
+  const type=mode==='walk'?(observedType??nearby?.observe?.type??active):(selectedObject()??selectedFence())?.type??active;
   const o=items[type], source=guideSources[o.source];
   byId('guide-card').innerHTML=`<div class="guide-art" style="--card-tint:${o.color}">${thumbnail(o)}</div>
     <div class="guide-content"><div class="guide-kicker">${o.family} · FIELD GUIDE</div><h3>${o.name}</h3><p>${o.fact}</p>
@@ -512,12 +520,18 @@ function objectRange(key,value,min,max,title,unit,step=.1){
   return `<label class="range"><span>${title}</span><input type="range" data-size="${key}" min="${min}" max="${max}" step="${step}" value="${value}"><output>${Number(value).toFixed(1)} ${unit}</output></label>`;
 }
 function renderInspector(){
-  const o=selectedObject();
+  const o=selectedObject()??selectedFence();
   const editable=mode==='select'&&Boolean(o);
   const visible=editable&&(compactScreen.matches?propertiesOpen:dismissedProperty!==o.id);
   byId('properties').hidden=!visible;
   byId('properties-open').hidden=!editable||visible;
   if(!editable){inspector.replaceChildren();return;}
+  if(o.type==='fence'){
+    const count=fenceHandleIndices(prepareFencePath(o)).length;
+    inspector.innerHTML=`<div class="inspector-head"><strong>木栅栏</strong><span>${count} 个控制点</span></div>
+      <div class="object-actions"><button class="btn delete" id="delete" type="button" ${world.game.mode==='adventure'?'hidden':''}>${icon('trash',14)} 删除</button></div>`;
+    return;
+  }
   const house=items[o.type].category==='house',traversable=isTraversable(o.type);
   const original=['cedar','alpine','shed'].includes(o.type);
   inspector.innerHTML=`<div class="inspector-head"><strong>${items[o.type].name}</strong><span>已选中</span></div>
@@ -640,7 +654,7 @@ function cancelDraft(){
   pending=null;
   if(wasDraft&&world.game.mode==='adventure')updateBuildbar();
   viewport?.clearPreview();
-  viewport?.showFootprint(mode==='select'?selectedObject():null,true,true);
+  showSelection();
 }
 function history(redo=false){
   if(world.game.mode==='adventure'){announce('冒险行动即时存档，无法撤销');return;}
@@ -650,9 +664,10 @@ function history(redo=false){
   const entry=stack.pop();
   (redo?before:after).push({world,replacesWorld:entry.replacesWorld});
   const shore=world.game.shore;
+  const fence=selectedFence();
   world=entry.world;
   if(!entry.replacesWorld&&shore)world={...world,game:{...world.game,shore}};
-  selected=null;
+  selected=fence&&!entry.replacesWorld&&selectedFence()?fence.id:null;
   save();
   sync();
   announce(redo?'已重做':'已撤销');
@@ -740,6 +755,11 @@ function updateObject(next){
 }
 function removeObject(id){
   if(world.game.mode==='adventure'){announce('在漫步模式靠近物件按 G 拆除并回收材料');return;}
+  if(world.strokes.some(s=>s.id===id&&s.type==='fence')){
+    selected=null;
+    commit({...world,strokes:world.strokes.filter(s=>s.id!==id)});
+    announce('已移除栅栏');return;
+  }
   if(!world.objects.some(o=>o.id===id)) return;
   selected=null;
   commit({...world,objects:world.objects.filter(o=>o.id!==id)});
@@ -811,17 +831,37 @@ function startBrush(type,p,diameter){
   draft={kind:'brush',stroke:{id:nextId,type,w:diameter,p:[[round(p.x),round(p.z)]]}};
   viewport.showStroke(draft.stroke);
 }
+function editedFence(p){
+  return p?moveFenceKnot(draft.stroke,draft.knot,p.x,p.z):draft.stroke;
+}
+function fenceInside(old,next){
+  // A long span can cross an unclaimed plot even if both endpoints are inside.
+  for(let i=0;i<next.p.length;i++){
+    const j=Math.max(0,i-1),a=next.p[j],b=next.p[i];
+    if(a===old.p[j]&&b===old.p[i])continue;
+    const n=Math.max(1,Math.ceil(Math.hypot(b[0]-a[0],b[1]-a[1])/.22));
+    for(let k=0;k<=n;k++){
+      if(!inBounds(a[0]+(b[0]-a[0])*k/n,a[1]+(b[1]-a[1])*k/n,.20))return false;
+    }
+  }
+  return true;
+}
 function down(p,event){
   if(!p) return;
   if(mode==='spawn'){startExploring(p.x,p.z);return;}
   if(mode==='walk')return;
   if(compactScreen.matches&&libraryOpen){setLibrary(false);return;}
-  if(open&&!inBounds(p.x,p.z,.08)){
+  if(open&&p.fenceId==null&&p.fenceKnot===undefined&&!inBounds(p.x,p.z,.08)){
     announce('这里还未扩建，点「扩建领地」预览相邻地块');
     return;
   }
   if(mode==='erase'){erase(p);return;}
   if(mode==='select'){
+    const fence=selectedFence();
+    if(fence&&p.id===fence.id&&p.fenceKnot!==undefined){
+      draft={kind:'fence',stroke:prepareFencePath(fence),knot:p.fenceKnot};
+      return;
+    }
     const current=selectedObject();
     if(current?.type==='cedar'&&p.ridgeDelta!==undefined){
       draft={kind:'ridge',start:p,object:current};
@@ -829,13 +869,15 @@ function down(p,event){
     }
     const corner=current&&isHouse(current)?footprint(current).findIndex(([x,z])=>Math.hypot(x-p.x,z-p.z)<.46):-1;
     if(corner>=0){draft={kind:'resize',start:p,object:current,corner};return;}
-    if(selected!==p.id){dismissedProperty=null;propertiesOpen=false;}
-    selected=p.id;
+    const picked=p.fenceId??p.id;
+    if(selected!==picked){dismissedProperty=null;propertiesOpen=false;}
+    selected=picked;
     updateBuildbar();
     const o=selectedObject();
     renderInspector();
     renderGuide();
-    viewport.showFootprint(o,true,true);
+    byId('tool-tip').textContent=toolTip();
+    showSelection();
     if(o) draft={kind:'move',start:p,object:o};
     return;
   }
@@ -853,7 +895,11 @@ function down(p,event){
 }
 function move(p){
   if(!p||!draft) return;
-  if(draft.kind==='brush'){
+  if(draft.kind==='fence'){
+    const next=editedFence(p);
+    viewport.showStroke(next);
+    viewport.showFenceHandles(next);
+  }else if(draft.kind==='brush'){
     addBrushPoint(p);
     viewport.showStroke(draft.stroke);
   } else if(draft.kind!=='move'||Math.hypot(p.x-draft.start.x,p.z-draft.start.z)>.13){
@@ -865,6 +911,14 @@ function move(p){
 function up(p){
   if(!draft) return;
   const current=draft;
+  if(current.kind==='fence'){
+    const next=editedFence(p);
+    cancelDraft();
+    if(next===current.stroke)return;
+    if(!fenceInside(current.stroke,next)){announce('请把栅栏放在已建领地内');return;}
+    commit({...world,strokes:world.strokes.map(s=>s.id===next.id?next:s)});
+    return;
+  }
   if(current.kind==='brush'){
     addBrushPoint(p);
     cancelDraft();
@@ -873,7 +927,10 @@ function up(p){
     commit({...world,game,strokes:[...world.strokes,current.stroke]});
     if(mode==='build')rememberItem(active);
     audio.play('build',.65);
-    if(mode==='build'&&!continuousPlacement)switchMode('select');
+    if(mode==='build'&&!continuousPlacement){
+      if(current.stroke.type==='fence'){selected=current.stroke.id;dismissedProperty=null;}
+      switchMode('select');
+    }
     return;
   }
   const o=p&&(current.kind!=='move'||Math.hypot(p.x-current.start.x,p.z-current.start.z)>.13)?dragShape(p):current.object;
@@ -921,7 +978,7 @@ function onInput(kind,p,event){
   else {
     lastHover=null;
     viewport.cursor(null);
-    viewport.showFootprint(mode==='select'?selectedObject():null,true,true);
+    showSelection();
   }
 }
 
@@ -1014,7 +1071,7 @@ inspector.addEventListener('change',e=>{
   }else if(e.target.matches('[data-material]'))updateObject({...o,wood:e.target.value});
 });
 inspector.addEventListener('click',e=>{
-  const btn=e.target.closest('button'),o=selectedObject();
+  const btn=e.target.closest('button'),o=selectedObject()??selectedFence();
   if(!btn||!o||!viewport)return;
   if(btn.id==='delete')removeObject(o.id);
   else if(btn.dataset.module)updateObject({...o,[btn.dataset.module]:o[btn.dataset.module]===false});
@@ -1176,6 +1233,7 @@ byId('expand').addEventListener('click',async()=>{
 document.addEventListener('keydown',e=>{
   if(document.querySelector('dialog[open]'))return;
   if(e.key==='Escape'){
+    if(draft?.kind==='fence'){cancelDraft();return;}
     if(byId('recent-rack').classList.contains('expanded')){toggleRecents(false);return;}
     if(compactScreen.matches&&libraryOpen){setLibrary(false);stage.focus({preventScroll:true});return;}
     if(!byId('properties').hidden){hideProperties();return;}

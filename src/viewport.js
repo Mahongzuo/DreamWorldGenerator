@@ -7,12 +7,14 @@ import {modelDefinitions,modelHeight,collisionParts} from './asset-registry.js';
 import * as T from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {createKit, disposeGroup} from './model.js';
-import {buildLand, buildObject, objectHeight, alignBridge,refreshLandRoads} from './sandbox-model.js';
+import {buildLand, buildObject, objectHeight, alignBridge,refreshLandRoads,refreshLandFences} from './sandbox-model.js';
 import {createRidgeHandle} from './ridge-handle.js';
+import {createFenceHandles} from './fence-handles.js';
+import {createFencePreview,pickFence} from './fence-view.js';
 import {createRoadPreview} from './road-preview.js';
 import {cabinRise,resolveCabinLayout,CABIN_EAVES} from './cabin-layout.js';
 import {isRoadEdit} from './road-coverage.js';
-import {changedAreas,objectBounds,overlapsBounds,roadEditAreas} from './edit-bounds.js';
+import {changedAreas,changedStrokes,objectBounds,overlapsBounds,roadEditAreas} from './edit-bounds.js';
 import {baseHeight, flyingAnimal, footprint, inFootprint, items, LAND, MAX_POINTS, themes, tileKey, tileShift, waterAnimal} from './sandbox-state.js';
 import {buildEcology} from './ecology.js';
 import {createShoreVisitors} from './shore-visitors.js';
@@ -113,6 +115,9 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
   const objects=new Map();
   const roadPreview=createRoadPreview(kit,scene,objects);
   const ridgeHandle=createRidgeHandle(stage,camera,onInput);
+  const fenceHandles=createFenceHandles(stage,camera,(x,z)=>land?.userData.field.height(x,z)??0,pointerData,onInput);
+  const fencePreview=createFencePreview(kit);
+  const visibleTiles=()=>region?.continuous?land.children:[land];
   let heldResidents=0,ecologyDebt=0;
   const shoreVisitors=createShoreVisitors({
     makeModel(type,id,w,field){
@@ -139,6 +144,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
   }
   function draw(){
     ridgeHandle.position();
+    fenceHandles.position();
     renderer.render(scene,playing?follow:camera);
     const {calls,triangles}=renderer.info.render;
     const next=`${calls} draws / ${(triangles/1000).toFixed(1)}k tris`;
@@ -219,6 +225,10 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
       const dist=localHit.applyMatrix4(group.matrixWorld).distanceToSquared(raycaster.ray.origin);
       if(dist<closest){closest=dist;result.id=id;}
     }
+    if(stage.dataset.mode==='select'){
+      result.fenceId=pickFence(visibleTiles(),camera,raycaster.ray,rect,e,closest);
+      if(result.fenceId!==null)result.id=null;
+    }
     return result;
   }
   canvas.addEventListener('pointerdown',(e)=>{
@@ -268,6 +278,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
 
   function clearPreview(){
     roadPreview.clear();
+    if(fencePreview.clear())renderer.shadowMap.needsUpdate=true;
     if(previewObject) disposeGroup(previewObject);
     if(hiddenObject) hiddenObject.visible=true;
     previewObject=hiddenObject=undefined;
@@ -360,6 +371,12 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
   }
   function showStroke(stroke){
     const {p,w,type}=stroke;
+    if(type==='fence'){
+      fencePreview.show(visibleTiles(),stroke);
+      stamps.count=0;marker.visible=false;
+      renderer.shadowMap.needsUpdate=true;schedule();
+      return;
+    }
     if(isRoadEdit(type)){
       roadPreview.show(world,land,region?.continuous,stroke);
       stamps.count=0;
@@ -409,10 +426,18 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
       return o!==old&&(['x','z','w','d','a','type'].some(key=>o[key]!==old[key])||
         (o.type==='cedar'&&o.deck!==old.deck));
     });
-    const landChange=!world||regionChange||terrainObjectsChanged||['theme','season','seed','strokes','biome','felled','regions'].some(key=>next[key]!==world[key]);
-    const roadChanges=landChange&&!regionChange?roadEditAreas(world,next):null;
+    const strokeEdits=regionChange?null:changedStrokes(world,next);
+    const fenceOnly=Boolean(strokeEdits?.length&&strokeEdits.every(s=>s.type==='fence'));
+    const landChange=!fenceOnly&&(!world||regionChange||terrainObjectsChanged||['theme','season','seed','strokes','biome','felled','regions'].some(key=>next[key]!==world[key]));
+    const roadChanges=roadEditAreas(world,next,strokeEdits);
     const lightChange=!world||next.light!==world.light;
-    if(landChange||objectsChanged||lightChange)clearPreview();
+    if(fenceOnly||landChange||objectsChanged||lightChange)clearPreview();
+    if(fenceOnly){
+      const ids=new Set(strokeEdits.map(s=>s.id));
+      if(region?.continuous)continuousLand.updateFences(next,ids);
+      else refreshLandFences(kit,land,next,region,ids);
+      renderer.shadowMap.needsUpdate=true;
+    }
     if(regionChange){
       controls.maxPolarAngle=region?1.13:Math.PI*.48;
       controls.minZoom=region ? .75 : .60;
@@ -845,6 +870,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     return new Promise(resolve=>c.toBlob(resolve,'image/png'));
   }
   return {update,cameraMode,reset,snapshot,focusPoint,projectGround,frameFrontier,releaseFrontier,showFrontier(preview){frontierOverlay(preview);schedule();},clearPreview,cursor,showFootprint,showObject,showStroke,
+    showFenceHandles(stroke){fenceHandles.show(playing?null:stroke);schedule();},
     roadAt(x,z){return Boolean(land?.userData.field.type(2,x,z));},
     beginWalk,endWalk,observe,chop,attack,strikeTarget,startChallenge(){return playing&&adventure.start(player);},
     walkPosition(){return player?{x:player.x,y:player.y,z:player.z}:null;},

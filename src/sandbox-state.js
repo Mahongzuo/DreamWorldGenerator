@@ -1,5 +1,6 @@
 import {isTraversable} from './traversal-shapes.js';
 import {MIN_RIDGE_RISE,MAX_RIDGE_RISE} from './cabin-layout.js';
+import {validFenceKnots} from './fence-path.js';
 import {normalizeGame} from './gameplay.js';
 import {sceneDesigns} from './scene-designs.js';
 import {modelDefinitions} from './asset-registry.js';
@@ -165,8 +166,14 @@ export function normalize(data, limits={}) {
       }
       return object;
     }),
-    strokes:data.strokes.slice(0,limits.maxStrokes??MAX_STROKES).filter(s=>s && Object.hasOwn(items,s.type) && items[s.type].brush && Array.isArray(s.p) && s.p.length && withId(s)).map(s=>
-      line(s.id,s.type,s.p.slice(0,MAX_POINTS).filter(Array.isArray).map(p=>[coord(p[0],limits.coordinateLimit??LAND.x),coord(p[1],limits.coordinateLimit??LAND.z)]),round(clamp(finite(s.w,items[s.type].width),.55,7)))).filter(s=>s.p.length)
+    strokes:data.strokes.slice(0,limits.maxStrokes??MAX_STROKES).filter(s=>s && Object.hasOwn(items,s.type) && items[s.type].brush && Array.isArray(s.p) && s.p.length && withId(s)).map(s=>{
+      // The standalone island's contour extends beyond the rectangular tile edges.
+      const edge=s.type==='fence'?1.12:1;
+      const p=s.p.slice(0,MAX_POINTS).filter(Array.isArray).map(([x,z])=>[coord(x,limits.coordinateLimit??LAND.x*edge),coord(z,limits.coordinateLimit??LAND.z*edge)]);
+      const stroke=line(s.id,s.type,p,round(clamp(finite(s.w,items[s.type].width),.55,7)));
+      if(s.type==='fence'&&p.length===s.p.length&&validFenceKnots(p,s.knots))stroke.knots=[...s.knots];
+      return stroke;
+    }).filter(s=>s.p.length)
   };
 }
 

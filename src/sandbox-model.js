@@ -1,5 +1,6 @@
 import {bridgeFit} from './bridge-fit.js';
 import {resolveCabinLayout} from './cabin-layout.js';
+import {prepareFencePath} from './fence-path.js';
 import {createRoadCoverage, crossSection, roadTypes as roadIds} from './road-coverage.js';
 import {traversalAnchor,isTraversable} from './traversal-shapes.js';
 import * as T from 'three';
@@ -351,7 +352,6 @@ function landscape(kit,world,field,region) {
   const flora=world.biome?biome.growth:themes[world.theme].growth;
   const coarse=Boolean(region?.coarse);
   const limit=world.biome?biome.density:37;
-  const inBounds=(x,z,m)=>region?tileInside(x,z,region.continuous?0:m):inside(x,z,m);
   const houses=world.objects.filter(o=>items[o.type].category==='house');
   const clear=(x,z,padding)=>houses.some(o=>inFootprint(x,z,o,padding));
   const treeSites=[],treeRandom=randFrom(world.seed+'tree-sites'),felled=new Set(world.felled);
@@ -430,23 +430,103 @@ function landscape(kit,world,field,region) {
       }
     }
   }
-  sampleParts=null;
-  for(const s of world.strokes){
-    if(s.type==='fence'){
-      let previous;
-      eachAlong(s.p,.94,(x,z)=>{
-        if(!inBounds(x,z,.2)||field.depth(x,z)>.38||clear(x,z,.13)){previous=undefined;return;}
-        const y=field.height(x,z);
-        parts.box('#8e6746',x,y+.44,z,.135,.89,.135,{surface:'wood'});
-        parts.box('#b08b5f',x,y+.91,z,.173,.083,.172,{surface:'wood'});
-        if(previous) for(const h of [.28,.67]) beam(parts,'#af875b',[previous.x,previous.y+h,previous.z],[x,y+h,z],.082,.103);
-        previous={x,y,z};
-      });
-    }
-  }
   const group=parts.finish(new T.Group());
   group.userData.samples=samples;
   return group;
+}
+
+// Keep at least one neighboring bay outside the tile so a cross-border rail
+// has both end heights. Long saved spans can cross many unloaded tiles.
+function fenceSampleRange(x,z,dx,dz) {
+  let from=0,to=1;
+  for(const [origin,delta,extent] of [[x,dx,LAND.x*1.12+2],[z,dz,LAND.z*1.12+2]]){
+    if(!delta){if(Math.abs(origin)>extent)return null;continue;}
+    const a=(-extent-origin)/delta,b=(extent-origin)/delta;
+    from=Math.max(from,Math.min(a,b));to=Math.min(to,Math.max(a,b));
+  }
+  return from<=to?[from,to]:null;
+}
+
+// Distribute posts by distance *along* the sampled line between fixed control
+// points. A hand-drawn stroke can contain many samples between two posts.
+function eachFencePost({p,knots},visit){
+  if(!p.length)return;
+  visit(0,p[0][0],p[0][1],false);
+  const lengths=[0];
+  for(let i=1;i<p.length;i++)
+    lengths.push(lengths[i-1]+Math.hypot(p[i][0]-p[i-1][0],p[i][1]-p[i-1][1]));
+  let ordinal=0;
+  for(let k=1;k<knots.length;k++){
+    const start=knots[k-1],end=knots[k],total=lengths[end]-lengths[start];
+    if(total<1e-6)continue;
+    const bays=Math.max(1,Math.round(total/.94)),pitch=total/bays;
+    let next=1;
+    for(let i=start+1;i<=end;i++){
+      const [x,z]=p[i-1],dx=p[i][0]-x,dz=p[i][1]-z;
+      const len=lengths[i]-lengths[i-1],offset=lengths[i-1]-lengths[start];
+      if(!len)continue;
+      const range=fenceSampleRange(x,z,dx,dz);
+      if(!range)continue;
+      next=Math.max(next,Math.ceil((offset+range[0]*len)/pitch-1e-8));
+      const last=Math.min(bays,Math.floor((offset+range[1]*len)/pitch+1e-8));
+      for(;next<=last;next++){
+        const t=Math.max(0,Math.min(1,(next*pitch-offset)/len));
+        const closes=end===p.length-1&&next===bays&&p[end][0]===p[0][0]&&p[end][1]===p[0][1];
+        visit(ordinal+next,x+dx*t,z+dz*t,closes);
+      }
+    }
+    ordinal+=bays;
+  }
+}
+
+export function buildFenceStroke(kit,stroke,world,field,region){
+  const parts=batch(kit),group=new T.Group(),posts=[],rails=[];
+  const houses=world.objects.filter(o=>items[o.type].category==='house');
+  const owns=(x,z)=>region?.continuous
+    ? x>=-LAND.x-1e-7&&x<LAND.x-1e-7&&z>=-LAND.z-1e-7&&z<LAND.z-1e-7
+    : region?tileInside(x,z,.2):inside(x,z,.2);
+  const clear=(x,z)=>(region?.continuous||owns(x,z))&&field.depth(x,z)<=.38&&
+    !houses.some(o=>inFootprint(x,z,o,.13));
+  let previous,previousIndex;
+  eachFencePost(prepareFencePath(stroke),(index,x,z,closes)=>{
+    if(!clear(x,z)){previous=null;return;}
+    const y=field.height(x,z),post=[x,y,z];
+    if(!closes&&owns(x,z)){
+      posts.push(post);
+      parts.box('#8e6746',x,y+.44,z,.135,.89,.135,{surface:'wood'});
+      parts.box('#b08b5f',x,y+.91,z,.173,.083,.172,{surface:'wood'});
+    }
+    if(previous&&previousIndex===index-1){
+      const [ax,ay,az]=previous,mx=(ax+x)/2,mz=(az+z)/2;
+      if(owns(mx,mz)&&clear(mx,mz)&&clear((ax+mx)/2,(az+mz)/2)&&clear((mx+x)/2,(mz+z)/2)){
+        rails.push([previous,post]);
+        for(const h of [.28,.67])beam(parts,'#af875b',[ax,ay+h,az],[x,y+h,z],.082,.103);
+      }
+    }
+    previous=post;previousIndex=index;
+  });
+  parts.finish(group);
+  group.userData={fenceId:stroke.id,fencePosts:posts,fenceRails:rails};
+  for(const mesh of group.children){
+    mesh.userData.fenceId=stroke.id;
+    if(region?.coarse)mesh.castShadow=false;
+  }
+  return group;
+}
+
+export function refreshLandFences(kit,land,world,region,ids){
+  const data=land.userData,fences=data.fences;
+  const strokes=new Map(world.strokes.filter(s=>s.type==='fence').map(s=>[s.id,s]));
+  for(const id of ids){
+    const old=fences.get(id);
+    if(old){disposeGroup(old);fences.delete(id);}
+    const stroke=strokes.get(id);
+    if(!stroke)continue;
+    const group=buildFenceStroke(kit,stroke,world,data.field,region);
+    if(group.children.length){land.add(group);fences.set(id,group);}
+  }
+  data.world=world;data.region=region;
+  return land;
 }
 
 // Road paint can hide a whole plant or wild tree without disturbing the other
@@ -595,9 +675,9 @@ export function buildLand(kit,world,region) {
   }
   if(world.strokes.some(s=>items[s.type].category==='water')) group.add(makeWater(kit,world,field,region));
   if(region?.coarse) group.traverse(mesh=>{if(mesh.isMesh)mesh.castShadow=false;});
-  group.userData={world,region,surface,roadDetails,field,baseField:field,vegetation,bridges,
+  group.userData={world,region,surface,roadDetails,field,baseField:field,vegetation,bridges,fences:new Map(),
     navigation:createNavigation(world,field,region,trees,bridges)};
-  return group;
+  return refreshLandFences(kit,group,world,region,world.strokes.filter(s=>s.type==='fence').map(s=>s.id));
 }
 
 // Same coordinate frame as buildLand: a standalone island uses world space,
