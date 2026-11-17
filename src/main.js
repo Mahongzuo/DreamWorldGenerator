@@ -1,5 +1,6 @@
 import {createGameAudio, soundtracks} from './game-audio.js';
 import {isTraversable,traversalTypes} from './traversal-shapes.js';
+import {cabinRise,MIN_RIDGE_RISE,MAX_RIDGE_RISE} from './cabin-layout.js';
 import {normalizeGame,buildingCost,canAfford,spend,craft,recipes,costText,rewardDefeat,visit,hurt,respawn,gather,quest} from './gameplay.js';
 import {sceneDesigns,appendScene,createScene} from './scene-presets.js';
 import {installFrontier} from './frontier-ui.js';
@@ -48,12 +49,13 @@ function record(id){
 const labels={summer:'常青',autumn:'秋林',winter:'初雪',day:'白昼',gold:'金暮',night:'月夜'};
 const toolLabels={select:'选择',build:'建造',erase:'橡皮',camera:'漫游'};
 const help={
-  select:'点选物件后拖动可移动，拖建筑四角可改尺寸。',
-  erase:'点一下物件或笔迹即可移除。',
+  select:'拖动物件可移动，拖建筑四角调整尺寸，拖雪松屋顶的箭头调整屋脊。',
+  erase:'在道路上拖动可擦去局部，点其他物件或笔迹可移除。',
   camera:'拖动旋转视角，滚轮或捏合缩放。'
 };
 const svg=(inside,view='0 0 100 48')=>`<svg viewBox="${view}" aria-hidden="true">${inside}</svg>`;
 function thumbnail(o){
+  if(o.id==='road-erase')return icon('eraser',30);
   const preview=packThumbnail(o.id);
   if(preview)return `<img src="${preview}" alt="${o.name}" loading="lazy" decoding="async">`;
   const ground='<ellipse cx="50" cy="38" rx="35" ry="7" fill="#829465" opacity=".22"/>';
@@ -101,6 +103,7 @@ function thumbnail(o){
 const byId=id=>document.getElementById(id);
 let linked=Boolean(location.search), origin=loadWorld(()=>createScene('garden')), world=origin;
 let mode='build',category='house',active='water-stilt',selected=null,draft=null,width=items[active].width,filter='';
+let eraserWidth=items['road-erase'].width;
 const compactScreen = matchMedia('(max-width: 900px)');
 let libraryOpen = !compactScreen.matches, propertiesOpen = false, continuousPlacement = true, placementAngle = 0;
 let lastHover = null, dismissedProperty = null, recentItems = [];
@@ -203,6 +206,8 @@ function toolTip(){
     return help[mode];
   }
   const o=items[active];
+  if(o.id==='road-erase')return '拖过旧路可以擦掉一段，缩小笔宽可以修边。';
+  if(o.id==='stonepath'||o.id==='dirtpath')return '拖画道路，靠近木屋可以接到门前。按住 Ctrl 拖动可局部擦路。';
   if(o.category==='house') return '在地面拖出轮廓生成建筑，也可单击放置。';
   if(o.brush) return '在地面按住拖画，单击可以盖一个圆形笔印。';
   if(o.category==='animal')return waterAnimal({type:o.id})?'点击足够深的水面放置。':'点击开阔地面放置，动物会在附近活动。';
@@ -266,14 +271,18 @@ function updateBuildbar(){
   const art=byId('equipped-art');
   if(art.dataset.item!==def.id){art.dataset.item=def.id;art.innerHTML=thumbnail(def);}
   const meta=byId('placement-meta');
-  meta.textContent=placing?(adventure?costText(cost):def.brush?'拖动绘制':`${def.category==='house'?'拖画轮廓':'点按放置'} · ${Math.round(angle*180/Math.PI)%360}°`):selectedItem?'已选中':'';
+  meta.textContent=placing?(adventure?costText(cost)||'免费调整':def.brush?'拖动绘制':`${def.category==='house'?'拖画轮廓':'点按放置'} · ${Math.round(angle*180/Math.PI)%360}°`):selectedItem?'已选中':'';
   meta.dataset.poor=String(placing&&adventure&&!canAfford(world.game,cost));
   byId('rotate-tool').hidden=!placing&&!selectedItem;
   byId('rotate-tool').disabled=placing&&Boolean(def.brush);
   byId('continuous-tool').hidden=!placing;
   byId('continuous-tool').setAttribute('aria-pressed',String(continuousPlacement));
-  byId('brush-width').closest('.brush-setting').hidden=!placing||!def.brush;
-  if(placing&&def.brush){byId('brush-width').value=width;byId('brush-value').textContent=Number(width).toFixed(1)+' m';}
+  const brushSettings=(placing&&def.brush)||mode==='erase';
+  byId('brush-width').closest('.brush-setting').hidden=!brushSettings;
+  if(brushSettings){
+    const diameter=mode==='erase'?eraserWidth:width;
+    byId('brush-width').value=diameter;byId('brush-value').textContent=diameter.toFixed(1)+' m';
+  }
   for(const btn of byId('recent-items').children)btn.setAttribute('aria-pressed',String(placing&&btn.dataset.recent===active));
 }
 function rotateTool(){
@@ -499,8 +508,8 @@ function respawnNow(){
  startExploring(.1,5.45);announce('已返回营地 · 保留装备与晶石');
 }
 
-function objectRange(key,value,min,max,title,unit){
-  return `<label class="range"><span>${title}</span><input type="range" data-size="${key}" min="${min}" max="${max}" step=".1" value="${value}"><output>${Number(value).toFixed(1)} ${unit}</output></label>`;
+function objectRange(key,value,min,max,title,unit,step=.1){
+  return `<label class="range"><span>${title}</span><input type="range" data-size="${key}" min="${min}" max="${max}" step="${step}" value="${value}"><output>${Number(value).toFixed(1)} ${unit}</output></label>`;
 }
 function renderInspector(){
   const o=selectedObject();
@@ -512,7 +521,7 @@ function renderInspector(){
   const house=items[o.type].category==='house',traversable=isTraversable(o.type);
   const original=['cedar','alpine','shed'].includes(o.type);
   inspector.innerHTML=`<div class="inspector-head"><strong>${items[o.type].name}</strong><span>已选中</span></div>
-    <div class="ranges">${house ? objectRange('w',o.w,2.4,8,'面宽','m')+objectRange('d',o.d,2.2,7,'进深','m') : traversable?objectRange('w',o.w,.6,3,'宽度','m')+objectRange('d',o.d,.35,3,'进深','m'):objectRange('w',o.w,.35,3,'大小','m')}</div>
+    <div class="ranges">${house ? objectRange('w',o.w,2.4,8,'面宽','m')+objectRange('d',o.d,2.2,7,'进深','m') : traversable?objectRange('w',o.w,.6,3,'宽度','m')+objectRange('d',o.d,.35,3,'进深','m'):objectRange('w',o.w,.35,3,'大小','m')}${o.type==='cedar'?objectRange('ridgeRise',cabinRise(o),MIN_RIDGE_RISE,MAX_RIDGE_RISE,'脊高','m',.05):''}</div>
     ${original?`<div class="object-options"><select data-material aria-label="木材"><option value="cedar">暖雪松</option><option value="dark">炭化木</option><option value="pale">浅白橡</option></select><button class="chip" type="button" data-module="deck" aria-pressed="${o.deck!==false}">前廊</button><button class="chip" type="button" data-module="chimney" aria-pressed="${o.chimney!==false}">烟囱</button></div>`:''}
     <div class="object-actions"><button class="btn delete" id="delete" type="button" ${world.game.mode==='adventure'?'hidden':''}>${icon('trash',14)} 删除</button></div>`;
   if(original) inspector.querySelector('[data-material]').value=o.wood??'cedar';
@@ -713,7 +722,9 @@ function showPlacementCost(cost){
   meta.dataset.poor=String(!canAfford(world.game,cost));
 }
 function updateObject(next){
-  if(!validObject(next)){
+  const old=world.objects.find(o=>o.id===next.id);
+  const movedFootprint=!old||['x','z','a','w','d'].some(key=>old[key]!==next[key]);
+  if(movedFootprint&&!validObject(next)){
     announce('这里太靠近水面、沙盘边缘或另一栋建筑');
     viewport.clearPreview();
     viewport.showFootprint(selectedObject(),true,true);
@@ -745,15 +756,24 @@ function strokeDistance(p,stroke){
   return nearest;
 }
 function erase(point){
+  if(point.id===null&&viewport.roadAt(point.x,point.z)){
+    startBrush('road-erase',point,eraserWidth);
+    return;
+  }
   if(world.game.mode==='adventure'){announce('冒险模式请靠近后用 F / G 采集和拆除');return;}
   if(point.id!==null){removeObject(point.id);return;}
-  const stroke=[...world.strokes].reverse().find(s=>strokeDistance(point,s)<=Math.max(.45,s.w*.5+.2));
+  const stroke=[...world.strokes].reverse().find(s=>!['stonepath','dirtpath','road-erase'].includes(s.type)
+    &&strokeDistance(point,s)<=Math.max(.45,s.w*.5+.2));
   if(!stroke){announce('点选想移除的物件或笔迹');return;}
   commit({...world,strokes:world.strokes.filter(s=>s.id!==stroke.id)});
   announce('已移除笔迹');
 }
 function dragShape(p){
   const {start,object,kind,corner}=draft;
+  if(kind==='ridge'){
+    const rise=round(clamp(cabinRise(object)+p.ridgeDelta,MIN_RIDGE_RISE,MAX_RIDGE_RISE));
+    return Math.abs(rise-cabinRise(object))<.01?object:{...object,ridgeRise:rise};
+  }
   if(kind==='move') return {...object,x:round(object.x+p.x-start.x),z:round(object.z+p.z-start.z)};
   if(kind==='resize'){
     const c=Math.cos(object.a),s=Math.sin(object.a);
@@ -776,16 +796,22 @@ function addBrushPoint(p){
   const points=draft.stroke.p;
   const [x,z]=points.at(-1);
   const distance=Math.hypot(p.x-x,p.z-z);
-  const step=clamp(width*.21,.27,.49);
+  const step=clamp(draft.stroke.w*.21,.27,.49);
   if(distance<step||points.length>=MAX_POINTS) return;
   const count=Math.min(MAX_POINTS-points.length,Math.ceil(distance/step),32);
   for(let i=1;i<=count;i++){
     const xx=round(x+(p.x-x)*i/count),zz=round(z+(p.z-z)*i/count);
-    if(!inBounds(xx,zz,width/2))break;
+    if(!inBounds(xx,zz,draft.stroke.w/2))break;
     points.push([xx,zz]);
   }
 }
-function down(p){
+function startBrush(type,p,diameter){
+  if(!inBounds(p.x,p.z,diameter/2)){announce('笔刷需要完整落在已扩建的领地内');return;}
+  if(world.strokes.length>=MAX_STROKES*(Object.keys(world.regions??{}).length||1)){announce('当前领地笔迹已满，扩建可增加容量');return;}
+  draft={kind:'brush',stroke:{id:nextId,type,w:diameter,p:[[round(p.x),round(p.z)]]}};
+  viewport.showStroke(draft.stroke);
+}
+function down(p,event){
   if(!p) return;
   if(mode==='spawn'){startExploring(p.x,p.z);return;}
   if(mode==='walk')return;
@@ -797,6 +823,10 @@ function down(p){
   if(mode==='erase'){erase(p);return;}
   if(mode==='select'){
     const current=selectedObject();
+    if(current?.type==='cedar'&&p.ridgeDelta!==undefined){
+      draft={kind:'ridge',start:p,object:current};
+      return;
+    }
     const corner=current&&isHouse(current)?footprint(current).findIndex(([x,z])=>Math.hypot(x-p.x,z-p.z)<.46):-1;
     if(corner>=0){draft={kind:'resize',start:p,object:current,corner};return;}
     if(selected!==p.id){dismissedProperty=null;propertiesOpen=false;}
@@ -812,10 +842,8 @@ function down(p){
   if(!inBounds(p.x,p.z,.11)) return;
   const def=items[active];
   if(def.brush){
-    if(!inBounds(p.x,p.z,width/2)){announce('笔刷需要完整落在已扩建的领地内');return;}
-    if(world.strokes.length>=MAX_STROKES*(Object.keys(world.regions??{}).length||1)){announce('当前领地笔迹已满，扩建可增加容量');return;}
-    draft={kind:'brush',stroke:{id:nextId,type:active,w:width,p:[[round(p.x),round(p.z)]]}};
-    viewport.showStroke(draft.stroke);
+    const eraseRoad=event?.ctrlKey&&(active==='stonepath'||active==='dirtpath');
+    startBrush(eraseRoad?'road-erase':active,p,width);
   }else{
     if(world.objects.length>=MAX_OBJECTS*(Object.keys(world.regions??{}).length||1)){announce('当前领地物件已满，扩建可增加容量');return;}
     const object=createShape(active,p.x,p.z);
@@ -831,7 +859,7 @@ function move(p){
   } else if(draft.kind!=='move'||Math.hypot(p.x-draft.start.x,p.z-draft.start.z)>.13){
     const o=dragShape(p);
     if(world.game.mode==='adventure')showPlacementCost(objectCost(o,draft.kind==='create'?null:draft.object));
-    viewport.showObject(o,draft.kind==='create'?null:o.id,validObject(o));
+    viewport.showObject(o,draft.kind==='create'?null:o.id,draft.kind==='ridge'||validObject(o));
   }
 }
 function up(p){
@@ -843,9 +871,9 @@ function up(p){
     const game=payFor(current.stroke);if(!game)return;
     record(current.stroke.type);
     commit({...world,game,strokes:[...world.strokes,current.stroke]});
-    rememberItem(current.stroke.type);
+    if(mode==='build')rememberItem(active);
     audio.play('build',.65);
-    if(!continuousPlacement)switchMode('select');
+    if(mode==='build'&&!continuousPlacement)switchMode('select');
     return;
   }
   const o=p&&(current.kind!=='move'||Math.hypot(p.x-current.start.x,p.z-current.start.z)>.13)?dragShape(p):current.object;
@@ -870,9 +898,9 @@ function hover(p){
     const o=createShape(active,p.x,p.z);
     viewport.cursor(null);
     viewport.showFootprint(o,validObject(o));
-  }else viewport.cursor(p,mode==='build'?Math.max(.32,width/2):.46,true);
+  }else viewport.cursor(p,mode==='build'?Math.max(.32,width/2):eraserWidth/2,true);
 }
-function onInput(kind,p){
+function onInput(kind,p,event){
   if(frontier?.input(kind,p))return;
   if(kind==='move'||kind==='hover'){
     pending={kind,p};
@@ -887,7 +915,7 @@ function onInput(kind,p){
     return;
   }
   pending=null;
-  if(kind==='down') down(p);
+  if(kind==='down') down(p,event);
   else if(kind==='up') up(p);
   else if(kind==='cancel') cancelDraft();
   else {
@@ -1106,7 +1134,11 @@ document.addEventListener('pointerdown',e=>{if(!e.target.closest('#recent-rack')
 byId('recent-items').addEventListener('click',e=>{const id=e.target.closest('[data-recent]')?.dataset.recent;if(id)equipItem(id);});
 byId('rotate-tool').addEventListener('click',rotateTool);
 byId('continuous-tool').addEventListener('click',()=>{continuousPlacement=!continuousPlacement;updateBuildbar();announce(continuousPlacement?'已开启连续放置':'放置一次后切换到选择');});
-byId('brush-width').addEventListener('input',e=>{width=e.target.valueAsNumber;updateBuildbar();if(lastHover)hover(lastHover);});
+byId('brush-width').addEventListener('input',e=>{
+  if(mode==='erase')eraserWidth=e.target.valueAsNumber;
+  else width=e.target.valueAsNumber;
+  updateBuildbar();if(lastHover)hover(lastHover);
+});
 byId('close-properties').addEventListener('click',hideProperties);
 byId('properties-open').addEventListener('click',()=>{propertiesOpen=true;dismissedProperty=null;renderInspector();});
 byId('scene-width').addEventListener('change',renderGenerationPolicy);

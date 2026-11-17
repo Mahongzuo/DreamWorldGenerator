@@ -1,4 +1,5 @@
 import {isTraversable} from './traversal-shapes.js';
+import {MIN_RIDGE_RISE,MAX_RIDGE_RISE} from './cabin-layout.js';
 import {normalizeGame} from './gameplay.js';
 import {sceneDesigns} from './scene-designs.js';
 import {modelDefinitions} from './asset-registry.js';
@@ -35,6 +36,7 @@ export const catalog = {
   decor: {name:'景观', icon:'tree', items:[
     ['stonepath','石板小径','画笔 · 遇水成桥','#a6a28b','#d0c3a2',1.15],
     ['dirtpath','砂土小路','画笔 · 遇水成桥','#b69d70','#c8b487',1.08],
+    ['road-erase','道路橡皮','画笔 · 局部擦路','#b57b68','#f2c9ab',1.45],
     ['fence','木栅栏','拖画 · 自动立柱','#987048','#c2a174',.9],
     ['rock','叠石','摆件 · 苔石','#9b9b83','#728755',.85],
     ['lantern','石灯笼','摆件 · 暖光','#9a9a85','#e8bb73',.7],
@@ -49,7 +51,7 @@ for(const [category,entries] of Object.entries(addedCatalog)) catalog[category].
 export const items = Object.fromEntries(Object.entries(catalog).flatMap(([category,{items}]) =>
   items.map(([id,name,detail,color,accent,width,depth,form,fact,source]) => [id,{id,category,name,detail,color,accent,width,depth,
     family:detail.split(' · ')[0],form:form??id,fact:fact??originalNotes[id],source,
-    brush:['water','grass','terrain'].includes(category)||['stonepath','dirtpath','fence'].includes(id)}])));
+    brush:['water','grass','terrain'].includes(category)||['stonepath','dirtpath','road-erase','fence'].includes(id)}])));
 export const waterAnimal=o=>['duck','goose','swan','fish'].includes(items[o.type]?.form);
 export const flyingAnimal=o=>['owl','swallow','kingfisher','butterfly','dragonfly','bee'].includes(items[o.type]?.form);
 export const isTree=id=>items[id]?.category==='plant'&&['针叶树','阔叶树'].includes(items[id].family);
@@ -157,6 +159,9 @@ export function normalize(data, limits={}) {
         object.wood = ['cedar','dark','pale'].includes(o.wood) ? o.wood : 'cedar';
         object.deck = o.deck !== false;
         object.chimney = o.chimney !== false;
+      }
+      if (o.type==='cedar' && Number.isFinite(o.ridgeRise)) {
+        object.ridgeRise=round(clamp(o.ridgeRise,MIN_RIDGE_RISE,MAX_RIDGE_RISE));
       }
       return object;
     }),

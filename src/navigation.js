@@ -1,4 +1,5 @@
 import {bridgeFit} from './bridge-fit.js';
+import {resolveCabinLayout} from './cabin-layout.js';
 import {isTraversable,worldTraversalBoxes,traversalAnchor} from './traversal-shapes.js';
 import {modelDefinitions,modelHeight,collisionParts} from './asset-registry.js';
 import {inside,inFootprint,isSolid,isTree,items,tileInside} from './sandbox-state.js';
@@ -9,6 +10,7 @@ const key=(x,z)=>Math.floor(x/size)+','+Math.floor(z/size);
 export function createNavigation(world,field,region,trees,bridges){
   const grid=new Map(), deckGrid=new Map(), passageGrid=new Map(), terrainBounds=region?.bounds??(region?tileInside:inside);
   const obstacles=world.objects.filter(o=>isSolid(o)||isTree(o.type));
+  const cabinSurfaces=new Map();
   const crossings=obstacles.filter(o=>items[o.type].form==='bridge');
   const allTrees=[...trees,...obstacles.filter(o=>isTree(o.type)).map(o=>({x:o.x,z:o.z,r:modelDefinitions[o.type]?.treeRadius?modelDefinitions[o.type].treeRadius*o.w/modelDefinitions[o.type].width:o.w*.10,id:o.id,type:o.type,crown:Math.max(o.w,o.d)*.62}))];
   const add=(target,entry,x,z,r)=>{
@@ -21,6 +23,19 @@ export function createNavigation(world,field,region,trees,bridges){
   };
   for(const o of obstacles)if(isSolid(o)&&items[o.type].form!=='bridge'){
     if(isTraversable(o.type)){for(const part of worldTraversalBoxes(o,traversalAnchor(field,o)))add(grid,{object:part,margin:0,surface:true,top:part.top,bottom:part.bottom,sourceId:o.id},part.x,part.z,Math.hypot(part.w,part.d)*.5);continue;}
+    if(o.type==='cedar'){
+      const layout=resolveCabinLayout(o,world,field),base=field.height(o.x,o.z);
+      const c=Math.cos(o.a),s=Math.sin(o.a);
+      function addPart(part,surface){
+        const x=o.x+c*part.x+s*part.z,z=o.z-s*part.x+c*part.z;
+        const object={type:o.type,id:o.id,x,z,w:part.w,d:part.d,a:o.a+part.a};
+        add(grid,{object,surface,top:base+part.top,bottom:base+part.bottom,margin:0,sourceId:o.id},
+          x,z,Math.hypot(part.w,part.d)*.5);
+      }
+      for(const part of layout.walkable)addPart(part,true);
+      for(const rail of layout.rails)addPart(rail,false);
+      cabinSurfaces.set(o.id,JSON.stringify([o.x,o.z,o.a,base,layout.walkable]));
+    }
     const margin=items[o.type].category==='house'?.18:0;
     for(const part of collisionParts(o))add(grid,{object:part,margin},part.x,part.z,Math.hypot(part.w,part.d)*.5+margin);
   }
@@ -76,10 +91,12 @@ export function createNavigation(world,field,region,trees,bridges){
   }
   function contact(x,z,r=.30,y=-Infinity,height=1.65){
     let deepest=null;
-    for(const entry of nearby(x,z,r)){if(entry.surface&&Number.isFinite(y)&&(y>=entry.top-.012||y+height<=entry.bottom+.01))continue;const hit=shapeContact(entry,x,z,r);if(hit&&(!deepest||hit.depth>deepest.depth))deepest=hit;}
+    const entries=nearby(x,z,r);
+    for(const entry of entries){if(entry.top!==undefined&&Number.isFinite(y)&&(y>=entry.top-.012||y+height<=entry.bottom+.01))continue;const hit=shapeContact(entry,x,z,r);if(hit&&(!deepest||hit.depth>deepest.depth))deepest=hit;}
     if(deepest)return deepest;
     if(Number.isFinite(y)&&y+height>ceilingAt(x,z,r)+.015)return {x:0,z:0,depth:.01};
-    const allowed=(a,b)=>terrainBounds(a,b,r+.03)&&(deck(a,b,r)!==null||[[0,0],[-r,0],[r,0],[0,-r],[0,r]].every(([dx,dz])=>field.depth(a+dx,b+dz)<=.42));
+    const allowed=(a,b)=>terrainBounds(a,b,r+.03)&&(deck(a,b,r)!==null||[[0,0],[-r,0],[r,0],[0,-r],[0,r]].every(([dx,dz])=>field.depth(a+dx,b+dz)<=.42)||
+      [...entries].some(e=>e.surface&&e.object.type==='cedar'&&y>=e.top-.012&&shapeContact(e,a,b,r)));
     if(allowed(x,z))return null;
     // Sample the boundary's outward gradient; handles shorelines and unowned territory.
     let nx=0,nz=0;
@@ -92,14 +109,14 @@ export function createNavigation(world,field,region,trees,bridges){
     return floor;
   }
   const sourceObjects=new Map(world.objects.filter(o=>isTraversable(o.type)).map(o=>[o.id,o]));
-  function sourceToken(id){const o=sourceObjects.get(id);return o?[o.type,o.x,o.z,o.w,o.d,o.a,traversalAnchor(field,o)].join('/'):null;}
+  function sourceToken(id){const o=sourceObjects.get(id);return o?[o.type,o.x,o.z,o.w,o.d,o.a,traversalAnchor(field,o)].join('/'):cabinSurfaces.get(id)??null;}
   function surfaceAt(x,z,r=.30,top=Infinity){return [...nearby(x,z,r)].filter(e=>e.surface&&Math.abs(e.top-top)<.04&&inFootprint(x,z,e.object,-r));}
   function cameraBlocked(x,y,z,r=.18){
     if(y-r<(deck(x,z,r)??field.height(x,z))||y+r>=ceilingAt(x,z,r)&&y-r<ceilingAt(x,z,r)+.85)return true;
     for(const entry of nearby(x,z,r)){
       if(!shapeContact(entry,x,z,r))continue;
       const o=entry.object,t=entry.tree,base=field.height(o?.x??t.x,o?.z??t.z);
-      if(entry.surface){if(y+r>entry.bottom&&y-r<entry.top)return true;continue;}
+      if(entry.top!==undefined){if(y+r>entry.bottom&&y-r<entry.top)return true;continue;}
       const height=o?(modelHeight(o)??(items[o.type].category==='house'?architectureHeight(items[o.type].form,o.w):Math.max(1,o.w))):Math.max(2,(t.crown??1)*2.7);
       if(y+r>base&&y-r<base+height)return true;
     }
@@ -128,7 +145,10 @@ export function createNavigation(world,field,region,trees,bridges){
         return anchor+bridgeRise(local,o.w)+.012;
       }
       const dx=x-piece.x,dz=z-piece.z,c=Math.cos(piece.a),s=Math.sin(piece.a);
-      if(Math.abs(c*dx-s*dz)<piece.w*.5-r*.56&&Math.abs(s*dx+c*dz)<.19)return piece.h+.056;
+      const halfDepth=piece.d===undefined?.19:piece.d*.5+.005;
+      if(Math.abs(c*dx-s*dz)>=piece.w*.5-r*.56||Math.abs(s*dx+c*dz)>=halfDepth)continue;
+      if(piece.d!==undefined&&field.type&&field.type(2,x,z)===0)continue;
+      return piece.h+.056;
     }
     return null;
   }

@@ -1,7 +1,9 @@
 import {bridgeFit} from './bridge-fit.js';
+import {resolveCabinLayout} from './cabin-layout.js';
+import {createRoadCoverage, crossSection, roadTypes as roadIds} from './road-coverage.js';
 import {traversalAnchor,isTraversable} from './traversal-shapes.js';
 import * as T from 'three';
-import {batch, buildCabin, contactShadow, randFrom} from './model.js';
+import {batch, buildCabin, contactShadow, disposeGroup, randFrom} from './model.js';
 import {baseHeight, biomeOf, biomes, continentHeight, contour, footprint, inFootprint, inside, items, LAND, themes, tileInside, tileShift, waterAnimal} from './sandbox-state.js';
 
 import {buildArchitecture, buildDecor, buildPlant} from './asset-models.js';
@@ -12,7 +14,6 @@ import {createNavigation} from './navigation.js';
 const SIZE = 320;
 const waterIds = Object.keys(items).filter(id=>items[id].category==='water');
 const grassIds = Object.keys(items).filter(id=>['grass','terrain'].includes(items[id].category));
-const roadIds = ['stonepath','dirtpath'];
 const ox = (x) => (.5 + x / (LAND.x * 2.18)) * SIZE;
 const oz = (z) => (.5 + z / (LAND.z * 2.18)) * SIZE;
 const scale = SIZE / (LAND.x * 2.18);
@@ -57,9 +58,9 @@ function drawStroke(ctx, points, width, color) {
 }
 
 export function makeField(world,region) {
-  const waterCanvas = canvas(), grassCanvas = canvas(), pathCanvas = canvas();
-  const [water,grass,path] = [waterCanvas,grassCanvas,pathCanvas].map(c=>c.getContext('2d',{willReadFrequently:true}));
-  for (const ctx of [water,grass,path]){
+  const waterCanvas = canvas(), grassCanvas = canvas();
+  const [water,grass] = [waterCanvas,grassCanvas].map(c=>c.getContext('2d',{willReadFrequently:true}));
+  for (const ctx of [water,grass]){
     if(region){ctx.beginPath();ctx.rect(ox(-LAND.x),oz(-LAND.z),ox(LAND.x)-ox(-LAND.x),oz(LAND.z)-oz(-LAND.z));ctx.clip();}
     else outline(ctx);
   }
@@ -92,7 +93,6 @@ export function makeField(world,region) {
         drawStroke(grass,s.p,s.w*scale,`rgb(${id},${Math.round(height*255)},0)`);
       }
     }
-    if (roadIds.includes(s.type)) drawStroke(path,s.p,s.w,`rgb(${(roadIds.indexOf(s.type)+1)*60},0,0)`);
   }
   water.globalCompositeOperation = 'destination-out';
   for (const o of world.objects) {
@@ -102,7 +102,7 @@ export function makeField(world,region) {
     water.closePath();
     water.fill();
   }
-  const data = [water,grass,path].map(ctx=>ctx.getImageData(0,0,SIZE,SIZE).data);
+  const data = [water,grass].map(ctx=>ctx.getImageData(0,0,SIZE,SIZE).data);
   const index = (x,z) => (Math.max(0,Math.min(SIZE-1,Math.floor(oz(z))))*SIZE+Math.max(0,Math.min(SIZE-1,Math.floor(ox(x)))))*4;
   const shift=region?tileShift(region.x,region.z):[0,0];
   const surface=region?(x,z)=>continentHeight(x+shift[0],z+shift[1]):baseHeight;
@@ -113,10 +113,7 @@ export function makeField(world,region) {
     const i=index(x,z);
     return data[channel][i+3] < 130 ? 0 : Math.round(data[channel][i]/[24,10,60][channel]);
   };
-  function paint(x,z){
-    return roadIds[type(2,x,z)-1]??waterIds[type(0,x,z)-1]??grassIds[type(1,x,z)-1];
-  }
-  return {data, depth, type, level, paint,
+  return withRoadCoverage({data, depth, type, level,
     height(x,z) {
       const i=index(x,z);
       const top=items[grassIds[Math.round(data[1][i]/10)-1]];
@@ -126,7 +123,15 @@ export function makeField(world,region) {
       const ripples=top?.form==='dune'?relief*.16*Math.sin(x*2.1+z*.43):0;
       const ground=surface(x,z)+relief+ripples, wet=depth(x,z);
       return ground+Math.min(-.13,level-.37-ground)*wet;
-    }};
+    }},world.strokes);
+}
+
+// The stroke list must be expressed in the same coordinate frame as the field.
+export function withRoadCoverage(field,strokes) {
+  const roadCoverage=createRoadCoverage(strokes);
+  const type=(channel,x,z)=>channel===2?roadIds.indexOf(roadCoverage.typeAt(x,z))+1:field.type(channel,x,z);
+  const paint=(x,z)=>roadCoverage.typeAt(x,z)??waterIds[type(0,x,z)-1]??grassIds[type(1,x,z)-1];
+  return {...field,type,paint,roadCoverage};
 }
 
 const color = (hex) => new T.Color(hex);
@@ -135,13 +140,48 @@ const landColors = {
   winter:['#c3d4cc','#dce4d7','#a6beb5','#bbcbbb'],
   autumn:['#9f995f','#b7aa74','#838e5c','#a79763']
 };
-function makeTerrain(world,field) {
+// Cache the three possible road appearances of each editable surface vertex.
+// Grass, bank shading and the seeded ground tint are sampled once, at terrain build time.
+const roadPalettes=new WeakMap();
+const roadColors=roadIds.map(id=>color(items[id].color));
+const surfaceShade=new T.Color();
+function bakeRoadColors(variants,i,base,strength,bank,bankStrength,light){
+  for(let material=0;material<=roadColors.length;material++){
+    surfaceShade.copy(base);
+    if(material)surfaceShade.lerp(roadColors[material-1],strength);
+    if(bank)surfaceShade.lerp(bank,bankStrength);
+    surfaceShade.multiplyScalar(light).toArray(variants,i*9+material*3);
+  }
+}
+
+export function updateRoadSurface(surface,field,xmin,zmin,xmax,zmax){
+  const cached=roadPalettes.get(surface);
+  if(!cached)return;
+  const {variants,start,end}=cached;
+  const {position,color:attribute}=surface.geometry.attributes;
+  const points=position.array,colors=attribute.array;
+  let first=Infinity,last=-1;
+  for(let i=start;i<end;i++){
+    const idx=i*3,x=points[idx],z=points[idx+2];
+    if(x<xmin||x>xmax||z<zmin||z>zmax)continue;
+    const at=i*9+field.type(2,x,z)*3;
+    if(colors[idx]===variants[at]&&colors[idx+1]===variants[at+1]&&colors[idx+2]===variants[at+2])continue;
+    colors[idx]=variants[at];colors[idx+1]=variants[at+1];colors[idx+2]=variants[at+2];
+    first=Math.min(first,idx);last=idx+3;
+  }
+  if(last>=0){
+    attribute.addUpdateRange(first,last-first);
+    attribute.needsUpdate=true;
+  }
+}
+
+export function makeTerrain(world,field) {
   const position=[], tint=[], uv=[], index=[];
   const rows=66, count=116;
+  const variants=new Float32Array((1+rows*count)*9);
   const palette = (landColors[world.season] ?? themes[world.theme].colors).map(color);
   const patches = grassIds.map(id=>color(items[id].color));
   const banks = waterIds.map(id=>color(items[id].accent));
-  const roads = roadIds.map(id=>color(items[id].color));
   const soil = ['#6e694c','#797255','#6a634d','#8f8062'].map(color);
   const random = randFrom(world.seed + 'earth');
   function vertex(x,z,y,shade) {
@@ -149,21 +189,25 @@ function makeTerrain(world,field) {
     tint.push(shade.r,shade.g,shade.b);
     uv.push(ox(x)/SIZE,1-oz(z)/SIZE);
   }
-  vertex(0,0,field.height(0,0),palette[0]);
+  const centerWet=field.type(0,0,0);
+  bakeRoadColors(variants,0,palette[0],.91,centerWet?at(banks,centerWet-1):null,.84,1);
+  vertex(0,0,field.height(0,0),surfaceShade.fromArray(variants,field.type(2,0,0)*3));
   for (let j=1;j<=rows+2;j++) {
     for (let i=0;i<count;i++) {
       const a=i/count*Math.PI*2;
       const r=contour(a)*Math.min(j/rows,1)*(j===rows+2 ? .975 : 1);
       const x=Math.cos(a)*r*LAND.x,z=Math.sin(a)*r*LAND.z;
       const y=j<=rows ? field.height(x,z) : j===rows+1 ? -.35-random()*.17 : -1.02;
-      const grass=field.type(1,x,z), road=field.type(2,x,z), wet=field.type(0,x,z);
+      const grass=field.type(1,x,z), wet=field.type(0,x,z);
       let shade=palette[0].clone().lerp(palette[1],.43+.34*Math.sin(x*.4+z*.64))
         .lerp(palette[2],.23+.21*Math.cos(z*.61-x*.37)).lerp(palette[3],.2);
       if (grass) shade.lerp(at(patches,grass-1),world.season==='winter' ? .33 : .86);
-      if (road) shade.lerp(at(roads,road-1),.91);
-      if (wet) shade.lerp(at(banks,wet-1),.84);
       if (j>rows) shade=soil[i%soil.length].clone().multiplyScalar(j===rows+2 ? .69 : 1);
-      else shade.multiplyScalar(.95+random()*.095);
+      else {
+        const v=position.length/3,road=field.type(2,Math.fround(x),Math.fround(z));
+        bakeRoadColors(variants,v,shade,.91,wet?at(banks,wet-1):null,.84,.95+random()*.095);
+        shade.fromArray(variants,v*9+road*3);
+      }
       vertex(x,z,y,shade);
       const now=1+(j-1)*count+i,next=1+(j-1)*count+(i+1)%count;
       if (j===1) index.push(0,next,now);
@@ -181,6 +225,7 @@ function makeTerrain(world,field) {
   const mesh=new T.Mesh(geometry,new T.MeshStandardMaterial({vertexColors:true,roughness:1}));
   mesh.receiveShadow=true;
   mesh.userData.owned=true;
+  roadPalettes.set(mesh,{variants,start:0,end:1+rows*count});
   return mesh;
 }
 
@@ -293,8 +338,15 @@ function camp(parts,x,y,z,s,random) {
   }
 }
 
-function landscape(kit,world,field,region,trees,bridges) {
-  const parts=batch(kit), random=randFrom(world.seed+'biome');
+function landscape(kit,world,field,region) {
+  const samples=[];
+  let sampleParts=null;
+  const parts=batch(kit,()=>sampleParts);
+  function capture(x,z){
+    const sample={x,z,hidden:false,instances:[],tree:null};
+    samples.push(sample);sampleParts=sample.instances;
+    return sample;
+  }
   const biome=biomes[biomeOf(world)];
   const flora=world.biome?biome.growth:themes[world.theme].growth;
   const coarse=Boolean(region?.coarse);
@@ -303,7 +355,7 @@ function landscape(kit,world,field,region,trees,bridges) {
   const houses=world.objects.filter(o=>items[o.type].category==='house');
   const clear=(x,z,padding)=>houses.some(o=>inFootprint(x,z,o,padding));
   const treeSites=[],treeRandom=randFrom(world.seed+'tree-sites'),felled=new Set(world.felled);
-  const sample=(radius=.95,rng=random)=>{
+  const sample=(radius,rng)=>{
     if(region) return [(rng()*2-1)*LAND.x*radius,(rng()*2-1)*LAND.z*radius];
     const angle=rng()*Math.PI*2,r=Math.sqrt(rng())*radius*contour(angle);
     return [Math.cos(angle)*r*LAND.x,Math.sin(angle)*r*LAND.z];
@@ -311,9 +363,10 @@ function landscape(kit,world,field,region,trees,bridges) {
   for(let i=0;!world.scene && flora && i<190 && treeSites.length<limit;i++){
     const [x,z]=sample(.96,treeRandom);
     const v=Math.hypot(x/LAND.x,z/LAND.z);
-    if((!world.biome && (v<.6 || (z>1.5 && v<.84))) || field.depth(x,z)>.12 || field.type(2,x,z) || clear(x,z,1.1) ||
+    if((!world.biome && (v<.6 || (z>1.5 && v<.84))) || field.depth(x,z)>.12 || clear(x,z,1.1) ||
       world.objects.some(o=>items[o.type].category!=='animal'&&Math.hypot(o.x-x,o.z-z)<1.55) || treeSites.some(([tx,tz])=>Math.hypot(tx-x,tz-z)<1.65)) continue;
     treeSites.push([x,z]);
+    const candidate=capture(x,z);
     const rng=randFrom(world.seed+'tree-'+i);
     const h=(1.7+rng()*2.35)*(z<-1.4 ? 1.16 : .73);
     const kind=rng()<.63 ? flora : (flora==='pine'?'broadleaf':'pine');
@@ -323,12 +376,14 @@ function landscape(kit,world,field,region,trees,bridges) {
       parts.put('disc','basic','#bb9a6a',x,y+.227,z,h*.046,.02,h*.046);
       continue;
     }
-    trees.push({key:i,type:kind==='broadleaf'?'oak':kind,x,z,r:h*.051,crown:h*(kind==='pine'?.20:.29)});
+    candidate.tree={key:i,type:kind==='broadleaf'?'oak':kind,x,z,r:h*.051,crown:h*(kind==='pine'?.20:.29)};
     tree(parts,kind,x,z,y,h,rng,world.season);
   }
   const grasses=landColors[world.season] ?? (world.biome?biome.colors:themes[world.theme].colors);
   for(let i=0;i<(coarse?290:1250);i++){
-    const [x,z]=sample(.98), wet=field.depth(x,z), grass=field.type(1,x,z);
+    sampleParts=null;
+    const random=randFrom(world.seed+'-ground-cover-'+i);
+    const [x,z]=sample(.98,random), wet=field.depth(x,z), grass=field.type(1,x,z);
     if(clear(x,z,.36)) continue;
     if(wet>.73){
       if(field.type(0,x,z)===3 && i%3===0){
@@ -338,7 +393,7 @@ function landscape(kit,world,field,region,trees,bridges) {
       }
       continue;
     }
-    if(field.type(2,x,z)) continue;
+    capture(x,z);
     const y=field.height(x,z), size=.14+random()*.31;
     const paint=items[grassIds[grass-1]];
     if(paint?.category==='terrain'){
@@ -375,6 +430,7 @@ function landscape(kit,world,field,region,trees,bridges) {
       }
     }
   }
+  sampleParts=null;
   for(const s of world.strokes){
     if(s.type==='fence'){
       let previous;
@@ -387,39 +443,115 @@ function landscape(kit,world,field,region,trees,bridges) {
         previous={x,y,z};
       });
     }
-    if(!roadIds.includes(s.type)) continue;
-    const crossing=(x,z)=>field.depth(x,z)>.32;
-    eachAlong(s.p,.28,(x,z,a,dist)=>{
-      if(!inBounds(x,z,.17)||clear(x,z,-.2)) return;
-      const y=field.height(x,z);
-      const near=.37;
-      const wet=crossing(x,z)||crossing(x+Math.sin(a)*near,z+Math.cos(a)*near)||crossing(x-Math.sin(a)*near,z-Math.cos(a)*near);
-      if(wet){
-        const h=Math.max(field.level+.29,y+.075);
-        bridges.push({x,z,a,w:s.w*1.17,h});
-        parts.box(dist%1<.3?'#a67a52':'#bc9063',x,h,z,s.w*1.17,.112,.275,{surface:'wood',ry:a});
-        for(const sign of [-1,1]){
-          const px=x+Math.cos(a)*s.w*.57*sign,pz=z-Math.sin(a)*s.w*.57*sign;
-          if(Math.round(dist/.28)%3===0) parts.box('#805c42',px,h+.26,pz,.10,.62,.10,{surface:'wood',ry:a});
-          parts.box('#9f7855',px,h+.48,pz,.077,.068,.31,{surface:'wood',ry:a});
+  }
+  const group=parts.finish(new T.Group());
+  group.userData.samples=samples;
+  return group;
+}
+
+// Road paint can hide a whole plant or wild tree without disturbing the other
+// instances in its batch. Keep its original transform only while it's hidden.
+export function updateRoadVegetation(group,field,bounds) {
+  const trees=[];
+  for(const sample of group.userData.samples){
+    const {x,z}=sample;
+    if(!bounds || bounds.some(b=>x>=b.x0 && x<=b.x1 && z>=b.z0 && z<=b.z1)){
+      const hidden=field.type(2,x,z)!==0;
+      if(sample.hidden!==hidden)for(const ref of sample.instances){
+        const attribute=ref.mesh.instanceMatrix, start=ref.index*16;
+        if(hidden){
+          ref.original=attribute.array.slice(start,start+16);
+          // Collapse all three local axes, retaining the instance's translation.
+          attribute.array.fill(0,start,start+12);
+        }else{
+          attribute.array.set(ref.original,start);ref.original=null;
         }
-      } else if(s.type==='stonepath'){
-        const offset=(random()-.5)*s.w*.28;
-        rock(parts,random()<.5?'#bab6a0':'#a5a794',x+Math.cos(a)*offset,y+.019,z-Math.sin(a)*offset,s.w*(.34+random()*.16),.055,.19+random()*.063,-a*.4);
+        attribute.addUpdateRange(start,16);attribute.needsUpdate=true;
+      }
+      sample.hidden=hidden;
+    }
+    if(sample.tree&&!sample.hidden)trees.push(sample.tree);
+  }
+  return trees;
+}
+
+export function buildRoadDetails(kit,world,field,region,bridges=[],cell) {
+  const parts=batch(kit), roads=field.roadCoverage??createRoadCoverage(world.strokes);
+  const houses=world.objects.filter(o=>items[o.type].category==='house');
+  const inBounds=(x,z)=>region?.continuous
+    ? x>=-LAND.x&&x<LAND.x&&z>=-LAND.z&&z<LAND.z
+    : region?tileInside(x,z,.17):inside(x,z,.17);
+  const crossing=(x,z)=>field.depth(x,z)>.32;
+  for(const {stroke,points,bounds} of roads.paths){
+    if(cell&&(bounds.maxX<cell.x0||bounds.minX>=cell.x1||bounds.maxZ<cell.z0||bounds.minZ>=cell.z1))continue;
+    eachAlong(points,.28,(x,z,a,dist)=>{
+      if(cell&&(x<cell.x0||x>=cell.x1||z<cell.z0||z>=cell.z1))return;
+      // Samples along one stroke keep their world alignment when sliced across tiles.
+      const c=Math.cos(a),s=Math.sin(a),index=Math.round(dist/.28);
+      if(!inBounds(x,z)||houses.some(o=>inFootprint(x,z,o,-.2)))return;
+      const wet=crossing(x,z)||crossing(x+s*.37,z+c*.37)||crossing(x-s*.37,z-c*.37);
+      if(!wet&&stroke.type!=='stonepath')return;
+      const owns=(offset,along)=>roads.strokeAt(x+c*offset+s*along,z-s*offset+c*along)===stroke;
+      const strips=crossSection(stroke.w,offset=>owns(offset,0)&&(!wet||(owns(offset,-.133)&&owns(offset,.133))));
+      for(const [left,right] of strips){
+        const w=right-left,offset=(left+right)/2,px=x+c*offset,pz=z-s*offset;
+        if(w<.04)continue;
+        const y=field.height(px,pz);
+        if(wet){
+          const h=Math.max(field.level+.29,y+.075),d=.28;
+          bridges.push({x:px,z:pz,a,w,d,h});
+          parts.box(index%4===0?'#a67a52':'#bc9063',px,h,pz,w,.112,d-.005,{surface:'wood',ry:a});
+          if(w<.35)continue;
+          for(const edge of [left+.045,right-.045]){
+            const postX=x+c*edge,postZ=z-s*edge;
+            if(index%3===0)parts.box('#805c42',postX,h+.26,postZ,.085,.62,.085,{surface:'wood',ry:a});
+            parts.box('#9f7855',postX,h+.48,postZ,.077,.068,d,{surface:'wood',ry:a});
+          }
+        }else{
+          const random=randFrom(world.seed+'-road-'+stroke.id+'-'+index);
+          const shift=(random()-.5)*w*.2,stoneX=px+c*shift,stoneZ=pz-s*shift;
+          const size=Math.min(w*.5,.48);
+          rock(parts,random()<.5?'#bab6a0':'#a5a794',stoneX,y+.019,stoneZ,
+            size,.055,Math.min(size,.19+random()*.063),a);
+        }
       }
     });
   }
   return parts.finish(new T.Group());
 }
 
-function makeTileTerrain(world,field,region){
+// Group the committed road details into a small number of patches. A cut
+// through the middle of a long bridge only replaces the affected patches.
+export function updateRoadDetails(kit,world,field,region,details,dirty,onCell) {
+  const cells=details.userData.cells??=new Map();
+  const size=8;
+  const nextRadius=(field.roadCoverage??createRoadCoverage(world.strokes)).paths.reduce((r,path)=>Math.max(r,path.stroke.w/2),0);
+  const reach=Math.max(nextRadius,details.userData.radius??0)+.3;
+  details.userData.radius=nextRadius;
+  for(let iz=Math.floor(-LAND.z/size);iz<=Math.floor(LAND.z/size);iz++){
+    for(let ix=Math.floor(-LAND.x/size);ix<=Math.floor(LAND.x/size);ix++){
+      const x0=ix*size,z0=iz*size,x1=x0+size,z1=z0+size;
+      if(dirty&&!dirty.some(b=>b.x0<=x1+reach&&b.x1>=x0-reach&&b.z0<=z1+reach&&b.z1>=z0-reach))continue;
+      const key=ix+','+iz, previous=cells.get(key);
+      onCell?.(key);
+      if(previous){disposeGroup(previous.group);cells.delete(key);}
+      const bridges=[],group=buildRoadDetails(kit,world,field,region,bridges,{x0,z0,x1,z1});
+      if(!group.children.length)continue;
+      if(region?.coarse)group.traverse(mesh=>{if(mesh.isMesh)mesh.castShadow=false;});
+      cells.set(key,{group,bridges});details.add(group);
+    }
+  }
+  return Array.from(cells.values()).flatMap(cell=>cell.bridges);
+}
+
+export function makeTileTerrain(world,field,region){
   const count=region.resolution??62, rows=count===32?24:48;
+  const variants=new Float32Array((rows+1)*(count+1)*9);
   const position=[],tint=[],index=[];
   const palette=(landColors[world.season]??(world.biome?biomes[world.biome].colors:themes[world.theme].colors)).map(color);
   const verge=color('#9da870'), [ox,oz]=tileShift(region.x,region.z);
   const grasses=grassIds.map(id=>color(items[id].color));
   const waters=waterIds.map(id=>color(items[id].accent));
-  const paths=roadIds.map(id=>color(items[id].color));
   for(let j=0;j<=rows;j++) for(let i=0;i<=count;i++){
     const x=(i/count*2-1)*LAND.x,z=(j/rows*2-1)*LAND.z;
     const xx=x+ox,zz=z+oz;
@@ -427,12 +559,11 @@ function makeTileTerrain(world,field,region){
     const boundary=region.continuous?1:T.MathUtils.clamp(Math.min(LAND.x-Math.abs(x),LAND.z-Math.abs(z))/1.25,0,1);
     const c=region.tint?region.tint(x,z):palette[0].clone().lerp(palette[1],.45+.39*Math.sin(xx*.32+zz*.42))
       .lerp(palette[2],.23+.20*Math.cos(zz*.61-xx*.37)).lerp(verge,1-boundary);
-    const g=field.type(1,x,z),w=field.type(0,x,z),r=field.type(2,x,z);
+    const g=field.type(1,x,z),w=field.type(0,x,z),r=field.type(2,Math.fround(x),Math.fround(z));
     if(g)c.lerp(at(grasses,g-1),boundary*.85);
-    if(r)c.lerp(at(paths,r-1),boundary*.90);
-    if(w)c.lerp(at(waters,w-1),boundary*.83);
-    c.multiplyScalar(.968+.045*Math.sin(xx*4.81+zz*3.77));
-    tint.push(c.r,c.g,c.b);
+    const v=j*(count+1)+i,slot=v*9+r*3;
+    bakeRoadColors(variants,v,c,boundary*.90,w?at(waters,w-1):null,boundary*.83,.968+.045*Math.sin(xx*4.81+zz*3.77));
+    tint.push(variants[slot],variants[slot+1],variants[slot+2]);
     if(i===count||j===rows)continue;
     const a=j*(count+1)+i,b=a+count+1;
     index.push(a,b,a+1,a+1,b,b+1);
@@ -445,13 +576,17 @@ function makeTileTerrain(world,field,region){
   const mesh=new T.Mesh(geometry,new T.MeshStandardMaterial({vertexColors:true,roughness:1}));
   mesh.receiveShadow=!region.coarse;
   mesh.userData.owned=true;
+  roadPalettes.set(mesh,{variants,start:0,end:(rows+1)*(count+1)});
   return mesh;
 }
 export function buildLand(kit,world,region) {
   const group=new T.Group(),field=region?.field??makeField(world,region);
   const surface=region?makeTileTerrain(world,field,region):makeTerrain(world,field);
-  const trees=[],bridges=[];
-  group.add(surface,landscape(kit,world,field,region,trees,bridges));
+  const vegetation=landscape(kit,world,field,region);
+  const trees=updateRoadVegetation(vegetation,field);
+  const roadDetails=new T.Group();
+  const bridges=updateRoadDetails(kit,world,field,region,roadDetails);
+  group.add(surface,vegetation,roadDetails);
   if(!region){
     const shadow=contactShadow();
     shadow.scale.set(1.58,1.47,1);
@@ -460,8 +595,22 @@ export function buildLand(kit,world,region) {
   }
   if(world.strokes.some(s=>items[s.type].category==='water')) group.add(makeWater(kit,world,field,region));
   if(region?.coarse) group.traverse(mesh=>{if(mesh.isMesh)mesh.castShadow=false;});
-  group.userData={surface,field,bridges,navigation:createNavigation(world,field,region,trees,bridges)};
+  group.userData={world,region,surface,roadDetails,field,baseField:field,vegetation,bridges,
+    navigation:createNavigation(world,field,region,trees,bridges)};
   return group;
+}
+
+// Same coordinate frame as buildLand: a standalone island uses world space,
+// while each continuous tile receives local strokes and local dirty bounds.
+export function refreshLandRoads(kit,land,world,region,localDirtyBounds) {
+  const data=land.userData;
+  const bounds=Array.isArray(localDirtyBounds)?localDirtyBounds:[localDirtyBounds];
+  const field=withRoadCoverage(data.baseField,world.strokes);
+  for(const b of bounds)updateRoadSurface(data.surface,field,b.x0,b.z0,b.x1,b.z1);
+  const trees=updateRoadVegetation(data.vegetation,field,bounds);
+  const bridges=updateRoadDetails(kit,world,field,region,data.roadDetails,bounds);
+  Object.assign(data,{world,region,field,bridges,navigation:createNavigation(world,field,region,trees,bridges)});
+  return land;
 }
 
 function tileRoof(group,parts,w,d,top,rise,hip,shade,tile,trim) {
@@ -655,7 +804,7 @@ export function alignBridge(group,field,o){
   bridgeShear.identity().elements[1]=slope;
   group.matrix.multiply(bridgeShear);group.matrixWorldNeedsUpdate=true;
 }
-export function buildObject(kit,o,world,field) {
+export function buildObject(kit,o,world,field,layout) {
   const def=items[o.type], y=objectHeight(field,o);
   let group=createPackModel(def,o);
   if(group){}
@@ -665,7 +814,9 @@ export function buildObject(kit,o,world,field) {
   else if(def.category==='house'&&!['cedar','alpine','shed'].includes(o.type))group=buildArchitecture(kit,o,def);
   else if(def.category==='house') {
     const c=Math.cos(o.a), s=Math.sin(o.a);
+    if(o.type==='cedar')layout??=resolveCabinLayout(o,world,field);
     group=buildCabin(kit,{roof:o.type==='cedar'?'gable':o.type,width:o.w,depth:o.d,seed:world.seed+'-'+o.id,wood:o.wood??'cedar',
+      layout,
       season:world.season,deck:o.deck!==false,chimney:o.chimney!==false,
       groundHeight:(x,z)=>field.height(o.x+x*c+z*s,o.z-x*s+z*c)-y});
   } else if(def.category==='animal')group=buildCreature(kit,o,def);
@@ -692,5 +843,6 @@ export function buildObject(kit,o,world,field) {
   group.rotation.y=o.a;
   if(def.form==='bridge')alignBridge(group,field,o);
   group.userData.object=o;
+  if(layout)group.userData.cabinLayout=layout;
   return group;
 }

@@ -1,4 +1,5 @@
 import * as T from 'three';
+import {atticWindowFits, CABIN_EAVES, CABIN_FLOOR, facadePoint, resolveCabinLayout} from './cabin-layout.js';
 
 export const randFrom = (seed) => {
   let value = 2166136261;
@@ -162,7 +163,7 @@ export function createKit() {
   };
 }
 
-export function batch(kit) {
+export function batch(kit, captureInstances) {
   const entries = new Map();
   const instance = new T.Object3D();
   const tint = new T.Color();
@@ -173,14 +174,17 @@ export function batch(kit) {
     instance.rotation.set(rx, ry, rz);
     instance.scale.set(sx, sy, sz);
     instance.updateMatrix();
-    entries.get(key).parts.push([instance.matrix.clone(), color]);
+    const data = [instance.matrix.clone(), color];
+    if (captureInstances) data.push(captureInstances());
+    entries.get(key).parts.push(data);
   }
   const box = (color, x, y, z, sx, sy, sz, options = {}) =>
     put('box', options.surface ?? 'basic', color, x, y, z, sx, sy, sz, options.rx, options.ry, options.rz, options.shadow);
   function finish(group) {
     for (const {shape, surface, shadow, parts} of entries.values()) {
       const mesh = new T.InstancedMesh(kit.geometry[shape], kit.materials[surface], parts.length);
-      parts.forEach(([matrix, color], i) => {
+      parts.forEach(([matrix, color, captures], i) => {
+        if (captures) captures.push({mesh,index:i,original:null});
         mesh.setMatrixAt(i, matrix);
         mesh.setColorAt(i, tint.set(color));
       });
@@ -210,6 +214,141 @@ export function contactShadow() {
   return plane;
 }
 
+function cedarWalls(parts, state, layout, palette) {
+  const wood = new T.Color(palette.wood), wallBottom = CABIN_FLOOR;
+  for (const face of layout.facades) {
+    function timber(u, y, v, w, h, thickness, shade, surface = 'wood') {
+      const {x, z} = facadePoint(face, u, v);
+      parts.box(shade, x, y, z, w, h, thickness, {ry:face.yaw, surface});
+    }
+    // Openings are cut in the siding itself. Each opening's jamb overlaps the
+    // adjacent plank ends and its trim hides the small horizontal shadow gap.
+    const height = layout.eaves + (face.nz ? layout.ridgeRise : 0);
+    const rows = Math.ceil((height - wallBottom) / .15);
+    for (let i = 0; i < rows; i++) {
+      const lower = wallBottom + i * .15, upper = Math.min(height, lower + .15);
+      const bottom = lower+.004, top = upper-.004;
+      if (top <= bottom) continue;
+      const levels = new Set([bottom, top]);
+      for (const op of face.openings) {
+        for (const edge of [op.bottom-.035, op.bottom+op.height+.035])
+          if (edge > bottom && edge < top) levels.add(edge);
+      }
+      const heights = [...levels].sort((a,b)=>a-b);
+      for (let j=1; j<heights.length; j++) {
+        const low=heights[j-1], high=heights[j], y=(low+high)/2;
+        const half = y <= layout.eaves ? face.span / 2 :
+          face.span / 2 * Math.max(0, 1 - (y - layout.eaves) / layout.ridgeRise);
+        const cuts = face.openings.filter(op => y > op.bottom-.035 && y < op.bottom+op.height+.035);
+        // A stain belongs to a course and a bay, even where a sill cuts the course.
+        const random = randFrom(state.seed + '-plank-' + face.side + '-' + i);
+        for (let b = 0; b < face.bays.length; ) {
+          const start = b;
+          b = Math.min(face.bays.length, b + (b === 0 && i % 2 ? 1 : 2));
+          const left = Math.max(-half, start ? face.bays[start] - face.pitch / 2 : -face.span / 2);
+          const right = Math.min(half, b < face.bays.length ? face.bays[b] - face.pitch / 2 : face.span / 2);
+          const shade = wood.clone().multiplyScalar(.91 + random() * .15);
+          let end = left;
+          function board(to) {
+            if (to - end > .016) timber((end + to) / 2, y, -.025, to - end - .006,
+              high-low, .145, shade);
+          }
+          for (const op of cuts) {
+            const a = op.u - op.width / 2 - .035, z = op.u + op.width / 2 + .035;
+            if (z < left || a > right) continue;
+            board(Math.min(right, a));
+            end = Math.max(end, z);
+          }
+          board(right);
+        }
+      }
+    }
+    for (let i = 1; i < face.bays.length; i++) {
+      const u = face.bays[i] - face.pitch / 2;
+      timber(u, (wallBottom + layout.eaves) / 2, .04, .09, layout.eaves-wallBottom, .10, palette.trim);
+    }
+    for (const op of face.openings) {
+      const door = op.kind === 'door', mid = op.bottom + op.height / 2, head = op.bottom + op.height;
+      // Deep, dark jambs and a recessed sash make the opening read in daylight.
+      for (const s of [-1, 1]) timber(op.u + s * (op.width / 2 + .035), mid, .005,
+        .10, op.height + .12, .20, palette.trim);
+      timber(op.u, head + .03, .025, op.width + .25, .11, .22, palette.trim);
+      if (door) {
+        timber(op.u, mid, -.035, op.width, op.height, .08, palette.door);
+        for (const s of [-.33, -.11, .11, .33]) timber(op.u + op.width * s, mid, .009,
+          .012, op.height - .09, .012, palette.trim);
+        timber(op.u, head - .49, .024, .56, .52, .046, '#c4ad83');
+        timber(op.u, head - .49, .054, .45, .405, .025, '#ffdba0', 'window');
+        timber(op.u + .35, mid, .064, .05, .085, .055, '#c9b68d', 'metal');
+        const lamp = op.u - op.width / 2 - .17;
+        timber(lamp, head - .27, .11, .125, .21, .13, '#ffd691', 'window');
+        timber(lamp, head - .12, .115, .20, .07, .18, palette.trim);
+      } else {
+        timber(op.u, mid, -.04, op.width, op.height, .035, '#ffe1b0', 'window');
+        timber(op.u, mid, .018, .042, op.height, .055, '#e1c79c');
+        timber(op.u, mid, .022, op.width, .048, .055, '#e1c79c');
+        timber(op.u, op.bottom - .044, .06, op.width + .26, .09, .255, palette.trim);
+        timber(op.u, op.bottom - .10, .13, op.width + .19, .035, .09, '#918375', 'metal');
+      }
+    }
+  }
+}
+
+function cedarPorch(parts, state, layout, palette) {
+  const face = layout.facades.find(f => f.side === layout.entry.side);
+  const base = CABIN_FLOOR, deck = layout.walkable[0], u = layout.entry.u;
+  const center = state.deck === false ? u : 0;
+  const board = new T.Color(palette.wood);
+  function woodAt(u, y, v, w, h, d, shade, options) {
+    const p = facadePoint(face, u, v);
+    parts.box(shade, p.x, y, p.z, w, h, d, {surface:'wood', ry:face.yaw, ...options});
+  }
+  const count = Math.ceil(deck.w / .16), size = deck.w / count;
+  const random = randFrom(state.seed + '-porch');
+  for (let i = 0; i < count; i++) woodAt(center - deck.w/2 + size*(i+.5), base - .048,
+    deck.d/2, size-.009, .096, deck.d, board.clone().multiplyScalar(.87 + random() * .19));
+  woodAt(center, base-.13, deck.d-.055, deck.w, .15, .11, palette.trim);
+  for (const post of layout.porchPosts) {
+    const h = base - .12 - post.bottom;
+    if (h > 0) parts.box(palette.trim, post.x, post.bottom+h/2, post.z, .15, h, .15,
+      {surface:'wood',ry:face.yaw});
+  }
+  for (const rail of layout.rails) {
+    const along = rail.w > rail.d;
+    const c = Math.cos(rail.a), s = Math.sin(rail.a);
+    for (const sign of [-1,1]) {
+      const dx = along ? sign * Math.max(0,rail.w/2-.045) : 0;
+      const dz = along ? 0 : sign * Math.max(0,rail.d/2-.045);
+      parts.box(palette.trim,rail.x+c*dx+s*dz,(rail.bottom+rail.top)/2,rail.z-s*dx+c*dz,
+        .09,rail.top-rail.bottom,.09,{surface:'wood',ry:rail.a});
+    }
+    for (const y of [rail.bottom+.38,rail.top-.035]) parts.box(palette.wood,rail.x,y,rail.z,
+      rail.w,.07,rail.d,{surface:'wood',ry:rail.a});
+  }
+  for (const t of layout.walkable.slice(1)) {
+    const h = t.top - t.bottom;
+    parts.box(palette.trim,t.x,(t.top+t.bottom)/2,t.z,t.w-.06,h,t.d-.02,{surface:'wood',ry:t.a});
+    parts.box(palette.wood,t.x,t.top-.028,t.z,t.w,.056,t.d,{surface:'wood',ry:t.a});
+  }
+  if (state.deck === false) return;
+  // Place furniture only where a seated figure would leave the approach open.
+  const edge = deck.w / 2 - .45;
+  const chair = u > 0 ? -edge : edge;
+  if (Math.abs(chair-u) > 1.12) {
+    for (const dx of [-.19,.19]) for (const dv of [-.16,.16])
+      woodAt(chair+dx,base+.16,.69+dv,.055,.32,.055,palette.trim);
+    woodAt(chair,base+.33,.69,.50,.09,.44,palette.door);
+    woodAt(chair,base+.54,.48,.50,.34,.062,palette.wood);
+  }
+  if (Math.abs(-chair-u) > 1.1) {
+    woodAt(-chair,base+.14,.42,.42,.28,.32,'#956b50');
+    for (let i=0;i<7;i++) {
+      const p=facadePoint(face,-chair+(random()-.5)*.31,.42+(random()-.5)*.21);
+      parts.put('grass','grass','#78905b',p.x,base+.27,p.z,.21,.26,.20,0,random()*6,0,false);
+    }
+  }
+}
+
 export function buildCabin(kit, state) {
   const group = new T.Group();
   const parts = batch(kit);
@@ -220,38 +359,48 @@ export function buildCabin(kit, state) {
   const cx = 0, cz = 0;
   const w = state.width, d = state.depth;
   const left = cx - w / 2, right = cx + w / 2, front = cz + d / 2, back = cz - d / 2;
-  const base = .56;
+  const base = CABIN_FLOOR;
   const localHeight = state.groundHeight;
   const alpine = state.roof === 'alpine', shed = state.roof === 'shed';
-  const wall = alpine ? .64 : 2.69;
-  const rise = alpine ? w * .71 : shed ? w * .24 : w * .37;
+  const object = {type:'cedar', x:0, z:0, a:0, w, d, deck:state.deck, ridgeRise:state.ridgeRise};
+  const layout = state.roof === 'gable' ? (state.layout ??
+    resolveCabinLayout(object, {strokes:[]}, {height:localHeight})) : null;
+  const wall = alpine ? .64 : CABIN_EAVES - base;
+  const rise = alpine ? w * .71 : shed ? w * .24 : layout?.ridgeRise ?? w * .37;
   const eaves = base + wall, ridge = eaves + rise;
   const roofY = (x) => shed ? ridge - rise * (x - left) / w : ridge - rise * Math.abs(x - cx) / (w / 2);
   const stain = (amount = .16) => board.clone().multiplyScalar(1 - amount * .55 + random() * amount);
   const wood = (color, x, y, z, a, b, c, opts) => parts.box(color, x, y, z, a, b, c, {surface: 'wood', ...opts});
   const box = parts.box;
 
-  for (const x of [left + .3, cx, right - .3]) {
-    for (const z of [back + .2, front - .15]) {
-      const y = localHeight(x, z);
-      box('#8d8f80', x, (base + y) / 2, z, .46, base - y, .46);
-      box('#b9b2a0', x, y + .09, z, .54, .18, .53);
-    }
+  function pier(x,z,y) {
+    if (y < base) box('#8d8f80', x, (base + y) / 2, z, .46, base - y, .46);
+    box('#b9b2a0', x, y + .09, z, .54, .18, .53);
+  }
+  if (layout) {
+    for (const p of layout.piers) pier(p.x,p.z,p.bottom);
+  } else {
+    for (const x of [left + .3, cx, right - .3])
+      for (const z of [back + .2, front - .15]) pier(x,z,localHeight(x,z));
   }
   wood(trim, cx, base - .065, cz, w + .2, .22, d + .16);
-  box('#6b5140', cx, base + wall / 2, cz, w - .08, wall, d - .08);
+  if (layout) {
+    cedarWalls(parts, state, layout, palette);
+  } else {
+    box('#6b5140', cx, base + wall / 2, cz, w - .08, wall, d - .08);
 
-  const step = .147;
-  for (let row = 0; row * step < ridge - base; row++) {
-    const y0 = base + row * step;
-    const y = y0 + step * .5;
-    const limit = Math.max(0, (ridge - y) / rise);
-    const span = y < eaves ? w : Math.min(w, limit * w);
-    if (span < .025) continue;
-    const x = shed ? left + span / 2 : cx;
-    for (const z of [back, front]) wood(stain(), x, y, z, span, step - .009, .083);
-    if (y < roofY(left)) wood(stain(), left, y, cz, d, step - .009, .086, {ry: Math.PI / 2});
-    if (y < roofY(right)) wood(stain(), right, y, cz, d, step - .009, .086, {ry: Math.PI / 2});
+    const step = .147;
+    for (let row = 0; row * step < ridge - base; row++) {
+      const y0 = base + row * step;
+      const y = y0 + step * .5;
+      const limit = Math.max(0, (ridge - y) / rise);
+      const span = y < eaves ? w : Math.min(w, limit * w);
+      if (span < .025) continue;
+      const x = shed ? left + span / 2 : cx;
+      for (const z of [back, front]) wood(stain(), x, y, z, span, step - .009, .083);
+      if (y < roofY(left)) wood(stain(), left, y, cz, d, step - .009, .086, {ry: Math.PI / 2});
+      if (y < roofY(right)) wood(stain(), right, y, cz, d, step - .009, .086, {ry: Math.PI / 2});
+    }
   }
   for (const x of [left, right]) {
     for (const z of [back, front]) {
@@ -262,7 +411,8 @@ export function buildCabin(kit, state) {
 
   const roofColor = state.season === 'winter' ? '#a4b5b1' : palette.roof;
   const seam = state.season === 'winter' ? '#bfcfc8' : palette.seam;
-  const overhang = alpine ? .33 : .44;
+  // Even a steep roof on a small cabin leaves headroom along a side porch.
+  const overhang = layout ? Math.min(.44, .34 * w / (2 * rise)) : alpine ? .33 : .44;
   function panel(x1, x2, slope) {
     const middle = (x1 + x2) * .5;
     const angle = Math.atan(slope);
@@ -287,6 +437,33 @@ export function buildCabin(kit, state) {
     panel(left - overhang, cx, 2 * rise / w);
     panel(cx, right + overhang, -2 * rise / w);
     box(seam, cx, ridge + .148, cz, .19, .103, d + .89, {surface: 'metal'});
+  }
+
+  if (state.chimney) {
+    const x = shed ? cx - w * .29 : cx - w * .21;
+    const z = cz - d * .23;
+    const low = roofY(x) - .5, high = roofY(x) + 1.01;
+    if (layout) {
+      const pitch = Math.atan(2 * rise / w);
+      box(seam, x, roofY(x) + .16, z, .85 / Math.cos(pitch), .065, .85, {rz:pitch, surface:'metal'});
+      box('#68756e', x, roofY(x) + .23, z, .56, .19, .60, {surface:'metal'});
+    }
+    box('#837c6c', x, (high + low) / 2, z, .52, high - low, .56);
+    for (let i = 0; i < 10; i++) {
+      const y = low + .073 + i * .147;
+      for (let j = 0; j < 2; j++) {
+        const brick = ['#999085','#a49c8e','#746e62','#b1a597'][Math.floor(random() * 4)];
+        box(brick, x + (j - .5) * .266, y, z, .253, .13, .577);
+        box(brick, x, y, z + (j - .5) * .27, .538, .131, .256);
+      }
+    }
+    box('#b7aa96', x, high + .035, z, .69, .13, .71);
+    box('#484b43', x, high + .104, z, .40, .04, .41);
+  }
+
+  if (layout) {
+    cedarPorch(parts, state, layout, palette);
+    return parts.finish(group);
   }
 
   const face = (side, horizontal, y, offset, sw, sh, thickness, color, surface) => {
@@ -320,7 +497,8 @@ export function buildCabin(kit, state) {
   face('front', doorX, base + doorHeight * .72, .254, doorWidth * .54, .445, .023, '#ffdb9f', 'window');
   face('front', doorX + doorWidth * .36, base + .96, .254, .058, .076, .057, '#c6a26e', 'metal');
   if (alpine) {
-    windowAt('front', cx, base + 2.84, .62, .58);
+    if (atticWindowFits(w, eaves, rise, base + 2.84, .62, .58))
+      windowAt('front', cx, base + 2.84, .62, .58);
     windowAt('front', cx - w * .19, base + 1.22, .61, .60);
     const x = cx + w * .22;
     const angle = -Math.atan(2 * rise / w);
@@ -335,23 +513,6 @@ export function buildCabin(kit, state) {
   const lampX = doorX - doorWidth / 2 - .20;
   face('front', lampX, base + 1.66, .153, .145, .23, .11, '#344034');
   face('front', lampX, base + 1.66, .224, .088, .129, .057, '#ffd691', 'window');
-  if (state.chimney) {
-    const x = shed ? cx - w * .29 : cx - w * .21;
-    const z = cz - d * .23;
-    const low = roofY(x) - .5, high = roofY(x) + 1.01;
-    box('#837c6c', x, (high + low) / 2, z, .52, high - low, .56);
-    for (let i = 0; i < 10; i++) {
-      const y = low + .073 + i * .147;
-      for (let j = 0; j < 2; j++) {
-        const brick = ['#999085','#a49c8e','#746e62','#b1a597'][Math.floor(random() * 4)];
-        box(brick, x + (j - .5) * .266, y, z, .253, .13, .577);
-        box(brick, x, y, z + (j - .5) * .27, .538, .131, .256);
-      }
-    }
-    box('#b7aa96', x, high + .035, z, .69, .13, .71);
-    box('#484b43', x, high + .104, z, .40, .04, .41);
-  }
-
   const deckDepth = state.deck ? 1.34 : .42;
   const deckWidth = state.deck ? w + .45 : doorWidth + .63;
   const deckX = state.deck ? cx : doorX;

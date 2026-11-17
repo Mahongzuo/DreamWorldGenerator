@@ -1,8 +1,9 @@
 import * as T from 'three';
-import {buildLand,makeField} from './sandbox-model.js';
+import {buildLand,makeField,refreshLandRoads} from './sandbox-model.js';
 import {disposeGroup} from './model.js';
 import {createNavigation} from './navigation.js';
 import {contains,regionAt,sliceRegion} from './territory.js';
+import {changedAreas,overlapsBounds} from './edit-bounds.js';
 import {tileKey,tileShift,continentHeight,LAND,items,themes,biomes} from './sandbox-state.js';
 
 // Global design data stays intact; only nearby terrain and its decoration reach the GPU.
@@ -44,8 +45,17 @@ export function createContinuousLand(kit){
     };
     return colorAt(rx,rz).lerp(colorAt(rx+nx,rz),wx).lerp(colorAt(rx,rz+nz).lerp(colorAt(rx+nx,rz+nz),wx),wz);
   }
-  function update(world,focus,detail){
-    if(!current||current.regions!==world.regions||current.objects!==world.objects||current.strokes!==world.strokes||current.season!==world.season)fields.clear();
+  function update(world,focus,detail,roadChanges=null){
+    const previous=current;
+    if(!current||current.regions!==world.regions||current.season!==world.season)fields.clear();
+    else if(current.objects!==world.objects||current.strokes!==world.strokes){
+      const changes=changedAreas(current,world);
+      for(const key of fields.keys()){
+        const [sx,sz]=tileShift(...key.split(',').map(Number));
+        const bounds={x0:sx-LAND.x-1,x1:sx+LAND.x+1,z0:sz-LAND.z-1,z1:sz+LAND.z+1};
+        if(changes.some(area=>overlapsBounds(bounds,area)))fields.delete(key);
+      }
+    }
     current=world;
     if(quality!==detail){for(const entry of cache.values())disposeGroup(entry.land);cache.clear();quality=detail;}
     const wanted=new Set(),trees=[],bridges=[];
@@ -57,13 +67,21 @@ export function createContinuousLand(kit){
       const signature=JSON.stringify({...local,objects:local.objects.filter(o=>items[o.type].category!=='animal'),coarse,neighborThemes:[[-1,0],[1,0],[0,-1],[0,1]].map(([dx,dz])=>world.regions[tileKey(x+dx,z+dz)]?.theme)});
       let entry=cache.get(key);
       if(entry?.signature!==signature){
-        if(entry)disposeGroup(entry.land);
         const [sx,sz]=tileShift(x,z),raw=localField(x,z);
         const stitched={...raw,height:(px,pz)=>field.height(px+sx,pz+sz),depth:(px,pz)=>field.depth(px+sx,pz+sz)};
-        const land=buildLand(kit,local,{x,z,coarse,resolution:detail==='low'?32:62,continuous:true,field:stitched,tint:(px,pz)=>tint(px+sx,pz+sz)});
-        land.position.set(sx,0,sz);group.add(land);
-        entry={signature,land};cache.set(key,entry);
+        const region={x,z,coarse,resolution:detail==='low'?32:62,continuous:true,field:stitched,tint:(px,pz)=>tint(px+sx,pz+sz)};
+        if(roadChanges&&entry?.world===previous&&entry.land.userData.region.coarse===coarse){
+          const localChanges=roadChanges.map(a=>({x0:a.x0-sx,x1:a.x1-sx,z0:a.z0-sz,z1:a.z1-sz}));
+          refreshLandRoads(kit,entry.land,local,region,localChanges);
+          entry.signature=signature;
+        }else{
+          if(entry)disposeGroup(entry.land);
+          const land=buildLand(kit,local,region);
+          land.position.set(sx,0,sz);group.add(land);
+          entry={signature,land};cache.set(key,entry);
+        }
       }
+      entry.world=world;
       if(entry.land.parent!==group)group.add(entry.land);
       cache.delete(key);cache.set(key,entry);
       const [sx,sz]=tileShift(x,z);

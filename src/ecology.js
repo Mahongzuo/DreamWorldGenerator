@@ -200,6 +200,13 @@ export function buildEcology(world,field,region,nav,crowd) {
     for(const m of Object.values(shapes)){m.geometry.dispose();m.dispose();}
     matte.dispose();cloudMaterial.dispose();
   }
+  function updateNavigation(nextField,nextNav){
+    // Keep the flock and wandering animals in place when a distant road changes.
+    // If an animal lost its footing, let the normal spawning logic find dry ground.
+    if ([...runners,...ducks,...butterflies].some(({agent:a})=>!nextNav.valid(a.x,a.z,a.r,a.kind)))return false;
+    field=nextField;nav=nextNav;
+    return true;
+  }
   step(0,world.light);
-  return {group,step,dispose,targets};
+  return {group,step,dispose,targets,updateNavigation};
 }

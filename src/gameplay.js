@@ -12,6 +12,7 @@ export const recipes={
  heal:{name:'营地补给 · 恢复 40 生命',wood:3,stone:1},
 };
 export function buildingCost(def,o={}){
+ if(def.id==='road-erase')return {};
  if(def.category==='animal')return {crystal:1};
  if(def.category==='house')return {wood:Math.max(4,Math.ceil((o.w??def.width)*(o.d??def.depth)/3)),stone:3};
  if(def.brush)return {stone:1};

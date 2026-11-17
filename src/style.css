@@ -413,6 +413,16 @@ button:hover:not(:disabled) {
   background: radial-gradient(ellipse at 49% 37%,#edf4e6,var(--scene-tint,#dbe8d3) 62%,#b9cec0);
 }
 
+#ridge-handle {
+  position:absolute; z-index:2; transform:translate(-50%,-100%);
+  display:grid; place-items:center; width:32px; height:36px; padding:0;
+  border:1px solid #786844; border-radius:12px 12px 6px 6px;
+  color:#493c24; background:#fff0c9; box-shadow:0 2px 5px #30271140;
+  font:600 23px/1 system-ui; touch-action:none; cursor:ns-resize;
+}
+#ridge-handle[hidden]{display:none}
+#ridge-handle:focus-visible{outline:3px solid #285e59;outline-offset:2px}
+@media (pointer:coarse){#ridge-handle{width:44px;height:44px}}
 .stage[data-light=gold] {
   background: radial-gradient(ellipse at 50% 42%,#f7e4c6,#d9c6aa 65%,#b8b39b);
 }

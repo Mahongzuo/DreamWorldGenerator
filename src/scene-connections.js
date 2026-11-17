@@ -1,5 +1,6 @@
 import {items,inFootprint,tileShift,LAND} from './sandbox-state.js';
-export const channel=s=>['stonepath','dirtpath'].includes(s.type)?'road':items[s.type]?.category==='water'?'river':null;
+import {createRoadCoverage, crossSection, isRoadPaint, smoothPoints} from './road-coverage.js';
+export const channel=s=>isRoadPaint(s.type)?'road':items[s.type]?.category==='water'?'river':null;
 export function distanceToStroke(x,z,s){
  let best=Infinity,point;
  for(let i=0;i<s.p.length;i++){
@@ -9,22 +10,23 @@ export function distanceToStroke(x,z,s){
  }
  return {distance:best,point};
 }
-// Match the midpoint quadratic strokes used by the canvas water mask. A tolerance of a few
-// centimetres is below one field pixel. This work runs only while querying ports on edited water.
-function smoothStroke(s){
- const points=s.p;
- if(points.length<3)return s;
- const path=[points[0]];
- for(let i=1;i<points.length-1;i++){
-  const a=path.at(-1),c=points[i],b=[(c[0]+points[i+1][0])/2,(c[1]+points[i+1][1])/2];
-  const n=Math.min(128,Math.max(1,Math.ceil(Math.sqrt(Math.hypot(a[0]-2*c[0]+b[0],a[1]-2*c[1]+b[1])/.08))));
-  for(let j=1;j<=n;j++){
-   const t=j/n,u=1-t;
-   path.push([u*u*a[0]+2*u*t*c[0]+t*t*b[0],u*u*a[1]+2*u*t*c[1]+t*t*b[1]]);
+// Mouths inferred from a nearby endpoint may stop a little short of a tile edge.
+function roadMouths(roads,stroke,p,anchor,axis){
+ const tangent=1-axis, steps=Math.ceil(Math.abs(p[axis]-anchor[axis])/.1);
+ const strips=crossSection(stroke.w,offset=>{
+  const x=anchor[0]+(tangent===0?offset:0), z=anchor[1]+(tangent===1?offset:0);
+  if(roads.strokeAt(x,z)!==stroke)return false;
+  for(let j=1;j<=steps;j++){
+   const edit=roads.editAt(x+(p[0]-anchor[0])*j/steps,z+(p[1]-anchor[1])*j/steps);
+   if(edit?.type==='road-erase')return false;
   }
- }
- path.push(points.at(-1));
- return {...s,p:path};
+  return true;
+ });
+ return strips.filter(([lo,hi])=>hi-lo>=.55-.001).map(([lo,hi])=>{
+  const offset=(lo+hi)/2,edge=[...p],join=[...anchor];
+  edge[tangent]+=offset;join[tangent]+=offset;
+  return {p:edge,anchor:join,w:Math.max(.55,hi-lo)};
+ });
 }
 
 function remainingMouth(p,anchor,axis,width,edits,index){
@@ -61,6 +63,7 @@ function remainingMouth(p,anchor,axis,width,edits,index){
 // Ports are inferred from editable strokes, so hand-drawn roads and rivers also connect.
 export function neighborPorts(world,x,z){
  const [sx,sz]=tileShift(x,z),ports=[];
+ const roads=createRoadCoverage(world.strokes),roadPoints=new Map(roads.paths.map(({stroke,points})=>[stroke,points]));
  let lastFill=-1;
  const edits=[];
  for(let i=world.strokes.length-1;i>=0;i--){
@@ -71,16 +74,16 @@ export function neighborPorts(world,x,z){
   if(stroke.type!=='shore-fill'&&channel(stroke)!=='river')continue;
   const xs=stroke.p.map(p=>p[0]),zs=stroke.p.map(p=>p[1]),mx=LAND.x+stroke.w+4,mz=LAND.z+stroke.w+4;
   if(Math.min(...xs)>sx+mx||Math.max(...xs)<sx-mx||Math.min(...zs)>sz+mz||Math.max(...zs)<sz-mz)continue;
-  edits.push({index,stroke:smoothStroke(stroke)});
+  edits.push({index,stroke:{...stroke,p:smoothPoints(stroke.p)}});
  }
  for(const [dx,dz] of [[-1,0],[1,0],[0,-1],[0,1]]){
   if(!world.regions[`${x+dx},${z+dz}`])continue;
   const axis=dx?0:1,edge=axis===0?sx+dx*LAND.x:sz+dz*LAND.z,tangent=axis===0?sz:sx,half=axis===0?LAND.z:LAND.x;
   for(const [index,s] of world.strokes.entries()){
    const kind=channel(s);if(!kind)continue;
-   let points=[];
-   for(let i=0;i<s.p.length-1;i++){
-    const a=s.p[i],b=s.p[i+1];if((a[axis]-edge)*(b[axis]-edge)>0||a[axis]===b[axis])continue;
+   const points=[],path=roadPoints.get(s)??s.p;
+   for(let i=0;i<path.length-1;i++){
+    const a=path[i],b=path[i+1];if((a[axis]-edge)*(b[axis]-edge)>0||a[axis]===b[axis])continue;
     const t=(edge-a[axis])/(b[axis]-a[axis]);if(t<0||t>1)continue;
     const p=[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t];points.push({p,anchor:p});
    }
@@ -89,11 +92,18 @@ export function neighborPorts(world,x,z){
     if(outside>=-.05&&outside<=3.1){const q=[...p];q[axis]=edge;points.push({p:q,anchor:p});}
    }
    for(const endpoint of points){
-    const mouth=kind==='river'&&index<lastFill?remainingMouth(endpoint.p,endpoint.anchor,axis,s.w,edits,index):{...endpoint,w:s.w};
-    if(!mouth)continue;
-    const {p,anchor,w}=mouth;
-    if(Math.abs(p[1-axis]-tangent)>half-1.2||ports.some(q=>q.kind===kind&&Math.hypot(q.p[0]-p[0],q.p[1]-p[1])<Math.max(1,w*.6)))continue;
-    ports.push({kind,type:s.type,w,p,anchor,dx,dz});
+    let mouths=[{...endpoint,w:s.w}];
+    if(kind==='road')mouths=roadMouths(roads,s,endpoint.p,endpoint.anchor,axis);
+    else if(index<lastFill)mouths=[remainingMouth(endpoint.p,endpoint.anchor,axis,s.w,edits,index)];
+    for(const mouth of mouths){
+     if(!mouth)continue;
+     const {p,anchor,w}=mouth;
+     if(Math.abs(p[1-axis]-tangent)>half-1.2)continue;
+     // Adjacent materials or two surviving sides of a split road are distinct ports.
+     const duplicate=ports.some(q=>q.kind===kind&&q.dx===dx&&q.dz===dz&&
+       Math.abs(q.p[1-axis]-p[1-axis])<(kind==='road'?(q.w+w)/2-.01:Math.max(1,w*.6)));
+     if(!duplicate)ports.push({kind,type:s.type,w,p,anchor,dx,dz});
+    }
    }
   }
  }
