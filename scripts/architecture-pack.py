@@ -103,6 +103,21 @@ def pagoda():
     cone((0,0,5.64),.13,.65,GOLD,top=.015,n=8)
     for z in [5.47,5.64,5.81]:cone((0,0,z),.18,.04,GOLD,top=.18,n=10)
 
+def roof_edge(x0, x1, y, z, rise, radius):
+    """Upturned corner ridge, in three short tapered segments."""
+    points = [(x0 + (x1-x0)*t, y, z + rise*t*t) for t in (0, .45, .78, 1)]
+    for i, (a, b) in enumerate(zip(points, points[1:])):
+        beam(a, b, radius * (1-i*.16), '#82938c', 6)
+
+
+def gauze_lantern(x, y, z, s):
+    cone((x, y, z), .15*s, .26*s, '#dc8b53', top=.15*s, n=10)
+    for offset in (-.14, .14):
+        cone((x, y, z+offset*s), .13*s, .045*s, TIMBER, top=.13*s, n=10)
+    beam((x,y,z+.16*s), (x,y,z+.30*s), .011*s, GOLD, 5)
+    beam((x,y,z-.15*s), (x,y,z-.26*s), .022*s, '#b66c4a', 5)
+
+
 def coveredbridge():
     w=7.2;d=2.15;n=24
     for i in range(n):
@@ -123,6 +138,29 @@ def coveredbridge():
     gable(2.8,6.7,2.67,.71,DARK,axis='x')
     for x in [-2.5,2.5]:
         for y in [-.83,.83]:box((x,y,.16),(.23,.23,.32),STONE)
+
+    # Keep every addition outside the 1.88 m clear central passage.
+    for side in (-1,1):
+        y=side*1.02
+        for x in (-2.4,0,2.4):
+            box((x,y,2.54),(.45,.25,.11),GOLD)
+            box((x,y,2.64),(.64,.30,.09),'#9e7250')
+        for x in (-3,-1.2,1.2,3):
+            gauze_lantern(x,y,2.28,.76)
+        for edge in (-1,1):
+            roof_edge(edge*2.70,edge*3.33,side*1.37,2.68,.19,.052)
+    for edge in (-1,1):
+        roof_edge(edge*2.70,edge*3.33,0,3.40,.12,.048)
+    for i in range(17):
+        x=(i-8)*.38
+        cone((x,0,3.42),.063,.075,'#7d9088',top=.073,n=6)
+    # Open ornamental truss in each gable, with a small lozenge at the ridge.
+    for x in (-3.27,3.27):
+        box((x,0,2.73),(.10,2.51,.105),TIMBER)
+        for side in (-1,1):
+            beam((x,side*.69,2.75),(x,0,3.19),.042,GOLD,6)
+        box((x,0,2.99),(.12,.22,.22),'#ba8351',rot=(math.pi/4,0,0))
+
 
 def teahall():
     base(5.8,4.6);box((0,.55,.31),(5.5,3.3,.45),'#aa9b7a')

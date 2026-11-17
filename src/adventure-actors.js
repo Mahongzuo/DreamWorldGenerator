@@ -1,25 +1,41 @@
 import * as T from 'three';
 import {seededRandom} from './scene-presets.js';
+import {tileShift} from './sandbox-state.js';
 import {regionAt} from './territory.js';
 // Two shared low-poly golems per explored plot; never a full-world simulation.
 export function createAdventureActors(scene,onEvent){
  const geometry=new T.IcosahedronGeometry(1,0),material=new T.MeshStandardMaterial({color:'#75668c',roughness:.88,flatShading:true});
  const warning=new T.MeshStandardMaterial({color:'#eda762',emissive:'#864222',emissiveIntensity:.6,roughness:.7});
  const eyeGeometry=new T.BoxGeometry(.16,.08,.04),eyeMaterial=new T.MeshBasicMaterial({color:'#ffe6a0'});
- const actors=new Map();let world,nav,crowd,region='',enabled=false;
+ const actors=new Map();let world,nav,crowd,region='',enabled=false,active=false,site=null;
+ const sign=new T.Group(),jade=new T.MeshStandardMaterial({color:0x75a69b,emissive:0x173e38,roughness:.72});
+ const stone=new T.Mesh(new T.CylinderGeometry(.48,.57,.10,8),material);
+ const crystal=new T.Mesh(new T.OctahedronGeometry(.25),jade);
+ crystal.scale.set(.75,1.6,.75);crystal.position.y=.49;sign.add(stone,crystal);
  function remove(a){a.crowd?.remove(a);a.group.removeFromParent();actors.delete(a.id);}
+ function stop(){for(const a of [...actors.values()])remove(a);sign.removeFromParent();active=false;site=null;region='';}
  function sync(next,n,c,player){
+  const changedNav=nav!==n;
   world=next;nav=n;crowd=c;enabled=next.game?.mode==='adventure';
-  const coords=player?regionAt(player.x,player.z):[0,0],key=coords.join(',');
-  if(!enabled){for(const a of [...actors.values()])remove(a);region='';return;}
-  if(region!==key){for(const a of [...actors.values()])remove(a);region=key;}
+  if(!enabled||!player||!world.game.health){stop();return;}
+  const coords=regionAt(player.x,player.z),key=coords.join(',');
+  if(region!==key){stop();region=key;}
+  if([0,1].every(i=>world.game.defeated.includes(key+':'+i))){stop();region=key;return;}
+  if(!site||changedNav){
+    const [x,z]=tileShift(...coords);
+    const within=(a,b)=>regionAt(a,b).join(',')===key;
+    site=nav.find(x+4,z+4,.65,'land',12,within);
+    if(!site){stop();return;}
+    sign.position.set(site.x,nav.height(site.x,site.z)+.06,site.z);
+  }
+  if(!active){if(sign.parent!==scene)scene.add(sign);return;}
   for(const a of [...actors.values()]){if(world.game.defeated.includes(a.id)){remove(a);continue;}if(a.crowd!==c){a.crowd?.remove(a);a.cell=null;a.crowd=c;const safe=n.find(a.x,a.z,a.r,'land',4,(x,z)=>c.fits(x,z,a.r,'land'));if(!safe){remove(a);continue;}a.x=safe.x;a.z=safe.z;c.update(a);place(a);}}
   if(!player)return;
   const rng=seededRandom(world.seed+'/'+key+'/guard');
   for(let i=0;i<2;i++){
    const id=key+':'+i,angle=rng()*Math.PI*2;
    if(actors.has(id)||world.game.defeated.includes(id))continue;
-   const spot=nav.find(player.x+Math.cos(angle)*(6+i*2),player.z+Math.sin(angle)*(6+i*2),.8,'land',5,(x,z)=>Math.hypot(x-player.x,z-player.z)>3&&crowd.fits(x,z,.8,'land'));
+   const spot=nav.find(site.x+Math.cos(angle)*(4+i),site.z+Math.sin(angle)*(4+i),.8,'land',7,(x,z)=>regionAt(x,z).join(',')===key&&Math.hypot(x-player.x,z-player.z)>2.2&&crowd.fits(x,z,.8,'land'));
    if(!spot)continue;
    const group=new T.Group(),body=new T.Mesh(geometry,material),head=new T.Mesh(geometry,material);
    body.scale.set(.55,.7,.4);body.position.y=.78;head.scale.set(.36,.34,.33);head.position.y=1.43;group.add(body,head);
@@ -55,5 +71,19 @@ export function createAdventureActors(scene,onEvent){
   if(a.hp<=0){remove(a);onEvent({type:'defeat',id:a.id});return {hp:0};}
   return {hp:a.hp};
  }
- return {sync,step,attack,nearby(player){if(!enabled||!player)return '';const a=[...actors.values()].sort((a,b)=>Math.hypot(a.x-player.x,a.z-player.z)-Math.hypot(b.x-player.x,b.z-player.z))[0];return a?`荒晶守卫 ${a.hp}/60 · ${a.windup>0?'正在蓄力，快躲开':'靠近后 J 攻击'}`:'本片领地已清理';},pause(){for(const a of actors.values()){a.windup=0;a.cooldown=1;}},clear(){for(const a of [...actors.values()])remove(a);region='';}};
+ function canStart(player){return Boolean(enabled&&player&&world.game.health>0&&site&&!active&&Math.hypot(player.x-site.x,player.z-site.z)<=3.2);}
+ function start(player){
+   if(!canStart(player))return false;
+   active=true;sign.removeFromParent();sync(world,nav,crowd,player);
+   if(!actors.size){active=false;if(site)scene.add(sign);return false;}
+   return true;
+ }
+ function status(player){
+   if(!enabled||!player)return {text:'',canAttack:false,canChallenge:false};
+   const nearest=[...actors.values()].sort((a,b)=>Math.hypot(a.x-player.x,a.z-player.z)-Math.hypot(b.x-player.x,b.z-player.z))[0];
+   if(nearest)return {text:'荒晶守卫 '+nearest.hp+'/60 · '+(nearest.windup>0?'正在蓄力':'挑战进行中'),canAttack:Math.hypot(nearest.x-player.x,nearest.z-player.z)<2.6&&Math.abs((player.y??0)-nearest.y)<1.2&&nav.sweep(player.x,player.z,nearest.x,nearest.z,.2,'land'),canChallenge:false};
+   const distance=site?Math.round(Math.hypot(site.x-player.x,site.z-player.z)):0;
+   return {text:site?'青晶遗迹 · '+distance+' 米 · 自选挑战':'本地没有待开启的挑战',canChallenge:canStart(player),canAttack:false};
+ }
+ return {sync,step,attack,start,status,pause(){for(const a of actors.values()){a.windup=0;a.cooldown=1;}},clear:stop};
 }

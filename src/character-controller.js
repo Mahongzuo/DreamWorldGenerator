@@ -62,6 +62,10 @@ export function stepCharacter(p,input,dt,nav,crowd,body){
   if(!p.grounded){
    const gravity=CHARACTER.gravity+(p.vy>0&&!p.jumpHeld?14:0);
    const previousY=p.y;p.y+=p.vy*h-gravity*h*h/2;p.vy-=gravity*h;
+   if(p.y>previousY&&nav.ceilingAt){
+    const headroom=nav.ceilingAt(p.x,p.z,CHARACTER.radius)-CHARACTER.height;
+    if(previousY<=headroom+.02&&p.y>headroom){p.y=headroom;p.vy=0;}
+   }
    const below=crowd?.contact(p.x,p.z,CHARACTER.radius,'land',body,p.y,CHARACTER.height);
    if(p.vy<=0&&below?.top!=null&&previousY>=below.top-.02){p.y=below.top+.015;p.vy=0;}
    if(p.vy<=0&&p.y<=floor){p.landingImpact=-p.vy;p.y=floor;p.grounded=true;p.vy=0;p.landTime=.10+Math.min(.22,p.landingImpact*.018);}

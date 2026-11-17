@@ -20,12 +20,12 @@ export function createContinuousLand(kit){
     if(fields.size>32)fields.delete(fields.keys().next().value);
     return field;
   }
-  function sample(x,z,method,fallback){
+  function sample(x,z,method){
     const [rx,rz]=regionAt(x,z),[sx,sz]=tileShift(rx,rz);
-    return localField(rx,rz)?.[method](x-sx,z-sz)??fallback;
+    return localField(rx,rz)?.[method](x-sx,z-sz);
   }
-  const field={level,height:(x,z)=>sample(x,z,'height',continentHeight(x,z)),depth:(x,z)=>sample(x,z,'depth',0),
-    paint:(x,z)=>sample(x,z,'paint',undefined),type:(channel,x,z)=>{
+  const field={level,height:(x,z)=>sample(x,z,'height')??continentHeight(x,z),depth:(x,z)=>sample(x,z,'depth')??0,
+    paint:(x,z)=>sample(x,z,'paint'),type:(channel,x,z)=>{
       const [rx,rz]=regionAt(x,z),[sx,sz]=tileShift(rx,rz);return localField(rx,rz)?.type(channel,x-sx,z-sz)??0;
     }};
   const paletteCache=new Map();
@@ -45,7 +45,8 @@ export function createContinuousLand(kit){
     return colorAt(rx,rz).lerp(colorAt(rx+nx,rz),wx).lerp(colorAt(rx,rz+nz).lerp(colorAt(rx+nx,rz+nz),wx),wz);
   }
   function update(world,focus,detail){
-    if(current!==world){fields.clear();current=world;}
+    if(!current||current.regions!==world.regions||current.objects!==world.objects||current.strokes!==world.strokes||current.season!==world.season)fields.clear();
+    current=world;
     if(quality!==detail){for(const entry of cache.values())disposeGroup(entry.land);cache.clear();quality=detail;}
     const wanted=new Set(),trees=[],bridges=[];
     for(let dz=-1;dz<=1;dz++)for(let dx=-1;dx<=1;dx++){
@@ -63,14 +64,26 @@ export function createContinuousLand(kit){
         land.position.set(sx,0,sz);group.add(land);
         entry={signature,land};cache.set(key,entry);
       }
+      if(entry.land.parent!==group)group.add(entry.land);
+      cache.delete(key);cache.set(key,entry);
       const [sx,sz]=tileShift(x,z);
       for(const tree of entry.land.userData.navigation.trees)if(tree.id===undefined)trees.push({...tree,x:tree.x+sx,z:tree.z+sz,region:key});
       for(const piece of entry.land.userData.bridges)bridges.push({...piece,x:piece.x+sx,z:piece.z+sz});
     }
-    for(const [key,entry] of cache)if(!wanted.has(key)){disposeGroup(entry.land);cache.delete(key);}
+    // Keep at most the same nine terrain meshes. At an outer edge, spare slots
+    // hold the last strip so walking back does not allocate it again.
+    for(const [key,entry] of cache){
+      if(wanted.has(key))continue;
+      entry.land.removeFromParent();
+      if(cache.size>9||!world.regions[key]){disposeGroup(entry.land);cache.delete(key);}
+    }
     const bounds=(x,z,r)=>contains(world.regions,x,z,r)&&Math.abs(regionAt(x,z)[0]-focus.x)<=1&&Math.abs(regionAt(x,z)[1]-focus.z)<=1;
     group.userData={field,navigation:createNavigation(world,field,{bounds},trees,bridges),visible: o=>Math.abs(o.x-focus.x*30)<=LAND.x*3+5&&Math.abs(o.z-focus.z*22.8)<=LAND.z*3+5};
     return group;
   }
-  return {update};
+  function clear(){
+    for(const entry of cache.values())disposeGroup(entry.land);
+    group.removeFromParent();cache.clear();fields.clear();current=null;
+  }
+  return {update,group,clear};
 }

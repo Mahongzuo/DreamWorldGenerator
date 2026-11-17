@@ -1,0 +1,15 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><title>江南桥梁通行回归</title><pre id="result">检查中</pre><script type="module">
+import {createScene} from '../src/scene-presets.js';
+import {createContinuousLand} from '../src/continuous-land.js';
+import {joinRegions} from '../src/territory.js';
+import {createKit,disposeGroup} from '../src/model.js';
+import {createCharacter,stepCharacter} from '../src/character-controller.js';
+const plot=createScene('garden'),w=joinRegions([[0,0,plot],[1,0,plot],[-1,0,plot]]),land=createContinuousLand(createKit()).update(w,{x:0,z:0},'low');
+const {field,navigation:nav}=land.userData,result=[];
+for(const dir of [1,-1]){
+ const p=createCharacter(-4*dir,.6,nav.support(-4*dir,.6));
+ for(let i=0;i<220;i++){stepCharacter(p,{forward:1,yaw:dir*Math.PI/2},1/60,nav);}
+ result.push((dir*p.x>4?'PASS':'FAIL')+' 过桥方向 '+dir+' 实际位置 '+[p.x,p.y,p.z].map(n=>n.toFixed(2)));
+}
+document.querySelector('#result').textContent=result.join('\n');disposeGroup(land);
+</script></html>

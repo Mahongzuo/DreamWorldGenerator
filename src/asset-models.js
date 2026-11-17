@@ -319,7 +319,16 @@ export function buildPlant(kit,o,def,season){
 export function buildDecor(kit,o,def){
   const b=batch(kit),s=o.w,{form,color:c,accent:a}=def;
   const box=(shade,x,y,z,w,h,d)=>b.box(shade,x,y,z,w,h,d,{surface:'wood'});
-  if(form==='well'){
+  if(form==='shore-stones'){
+    const sx=o.w/2.6,sz=o.d/1.55,sy=Math.sqrt(sx*sz);
+    for(const [x,z,rx,rz,h] of [[-.55,.24,.56,.38,.25],[.13,-.26,.60,.39,.19],[.73,-.12,.44,.34,.21],[-.92,-.28,.29,.23,.14],[.38,.40,.33,.23,.12]]){
+      b.put('rock','basic',c,x*sx,h*sy*.5,z*sz,rx*sx,h*sy*.54,rz*sz,0,.15);
+    }
+    const branch=(x,y,z)=>[x*sx,y*sy,z*sz];
+    beam(b,a,branch(-.67,.15,-.25),branch(.12,.35,-.08),.11*sx);
+    beam(b,a,branch(.12,.35,-.08),branch(.70,.68,-.01),.073*sx);
+    beam(b,a,branch(.70,.68,-.01),branch(1.02,.76,.12),.040*sx);
+  }else if(form==='well'){
     for(let i=0;i<12;i++){
       const t=i*tau/12;
       b.box(i%2?c:'#b5ad99',Math.sin(t)*s*.36,s*.21,Math.cos(t)*s*.36,s*.23,s*.46,s*.17,{ry:t});

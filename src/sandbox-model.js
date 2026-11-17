@@ -1,3 +1,4 @@
+import {bridgeFit} from './bridge-fit.js';
 import {traversalAnchor,isTraversable} from './traversal-shapes.js';
 import * as T from 'three';
 import {batch, buildCabin, contactShadow, randFrom} from './model.js';
@@ -62,10 +63,28 @@ export function makeField(world,region) {
     if(region){ctx.beginPath();ctx.rect(ox(-LAND.x),oz(-LAND.z),ox(LAND.x)-ox(-LAND.x),oz(LAND.z)-oz(-LAND.z));ctx.clip();}
     else outline(ctx);
   }
-  const rivers = world.strokes.filter(s=>items[s.type].category === 'water');
-  for (const [width,depth] of [[.95,26],[.42,97],[.03,222],[-.17,255]]) {
-    for (const s of rivers) drawStroke(water,s.p,s.w+width,`rgb(${(waterIds.indexOf(s.type)+1)*24},${depth},0)`);
+  // Layer neighbouring rivers together just as older saves did. Fill breaks a batch at its exact
+  // position in the drawing history, so later water can reclaim a channel through the bank.
+  const rivers=[];
+  function paintRivers(){
+    if(!rivers.length)return;
+    for(const [width,depth] of [[.95,26],[.42,97],[.03,222],[-.17,255]]){
+      for(const s of rivers)drawStroke(water,s.p,s.w+width,`rgb(${(waterIds.indexOf(s.type)+1)*24},${depth},0)`);
+    }
+    rivers.length=0;
   }
+  for(const stroke of world.strokes){
+    if(items[stroke.type].category==='water')rivers.push(stroke);
+    else if(stroke.type==='shore-fill'){
+      paintRivers();
+      water.save();
+      water.globalCompositeOperation='destination-out';
+      drawStroke(water,stroke.p,stroke.w+.30,'rgba(0,0,0,.35)');
+      drawStroke(water,stroke.p,stroke.w,'#000');
+      water.restore();
+    }
+  }
+  paintRivers();
   for (const s of world.strokes) {
     if (grassIds.includes(s.type)){
       const id=(grassIds.indexOf(s.type)+1)*10;
@@ -623,9 +642,18 @@ function tower(kit,o) {
 export function objectHeight(field,o){
   if(isTraversable(o.type))return traversalAnchor(field,o);
   const def=items[o.type];
-  if(waterAnimal(o)||def.form==='lily'||(def.form==='bridge'&&field.depth(o.x,o.z)>.56))
+  if(def.form==='bridge')return bridgeFit(field,o).base;
+  if(waterAnimal(o)||def.form==='lily')
     return field.level+(waterAnimal(o)?.043:0);
   return field.height(o.x,o.z);
+}
+const bridgeShear=new T.Matrix4();
+export function alignBridge(group,field,o){
+  const {base,slope}=bridgeFit(field,o);
+  group.position.set(o.x,base,o.z);group.rotation.y=o.a;
+  group.matrixAutoUpdate=false;group.updateMatrix();
+  bridgeShear.identity().elements[1]=slope;
+  group.matrix.multiply(bridgeShear);group.matrixWorldNeedsUpdate=true;
 }
 export function buildObject(kit,o,world,field) {
   const def=items[o.type], y=objectHeight(field,o);
@@ -662,6 +690,7 @@ export function buildObject(kit,o,world,field) {
   }
   group.position.set(o.x,y,o.z);
   group.rotation.y=o.a;
+  if(def.form==='bridge')alignBridge(group,field,o);
   group.userData.object=o;
   return group;
 }

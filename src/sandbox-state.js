@@ -145,7 +145,7 @@ export function normalize(data, limits={}) {
     ids.add(entry.id);
     return true;
   };
-  return {v:2, theme:data.theme, game:normalizeGame(data.game), ...(Object.hasOwn(sceneDesigns,data.scene)?{scene:data.scene}:{}), ...(data.generation?{generation:{width:Math.max(1,Math.min(3,Number(data.generation.width)||1)),height:Math.max(1,Math.min(3,Number(data.generation.height)||1)),density:Math.max(.4,Math.min(1.6,Number(data.generation.density)||1)),plants:Math.max(0,Math.min(36,Number(data.generation.plants)||0)),seed:String(data.generation.seed??'').slice(0,18)}}:{}), ...(Object.hasOwn(biomes,data.biome)?{biome:data.biome}:{}), seed:String(data.seed ?? 'FIELD').toUpperCase().replace(/[^A-Z0-9-]/g,'').slice(0,18) || 'FIELD',
+  return {v:2, theme:data.theme, game:normalizeGame(data.game), ...(Object.hasOwn(sceneDesigns,data.scene)?{scene:data.scene}:{}), ...(data.generation?{generation:{...(['canal','court'].includes(data.generation.layout)?{layout:data.generation.layout}:{}),width:Math.max(1,Math.min(3,Number(data.generation.width)||1)),height:Math.max(1,Math.min(3,Number(data.generation.height)||1)),density:Math.max(.4,Math.min(1.6,Number(data.generation.density)||1)),plants:Math.max(0,Math.min(36,Number(data.generation.plants)||0)),seed:String(data.generation.seed??'').slice(0,18)}}:{}), ...(Object.hasOwn(biomes,data.biome)?{biome:data.biome}:{}), seed:String(data.seed ?? 'FIELD').toUpperCase().replace(/[^A-Z0-9-]/g,'').slice(0,18) || 'FIELD',
     felled:Array.isArray(data.felled)?[...new Set(data.felled.filter(k=>Number.isInteger(k)&&k>=0&&k<190))].slice(0,190):[],
     season:['summer','autumn','winter'].includes(data.season) ? data.season : 'summer',
     light:['day','gold','night'].includes(data.light) ? data.light : 'day',
@@ -165,7 +165,7 @@ export function normalize(data, limits={}) {
   };
 }
 
-export function loadWorld() {
+export function loadWorld(fresh=()=>preset()) {
   const query = new URL(location.href).searchParams;
   if (query.has('world')) {
     try {
@@ -194,8 +194,8 @@ export function loadWorld() {
     for (const key of ['season','light','seed']) if (query.has(key)) world[key] = query.get(key);
     return normalize(world);
   }
-  try { return normalize(JSON.parse(localStorage.getItem(STORE_KEY))) ?? preset(); }
-  catch { return preset(); }
+  try { return normalize(JSON.parse(localStorage.getItem(STORE_KEY))) ?? fresh(); }
+  catch { return fresh(); }
 }
 
 export const worldLink = (world) => {

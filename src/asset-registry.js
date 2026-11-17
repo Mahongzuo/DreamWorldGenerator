@@ -11,7 +11,16 @@ export const modelDefinitions={
   'pack-ginkgo':{width:1.7,depth:1.7},
   'pack-basalt':{width:2.1,depth:1.9,collision:true},
   'pack-karst':{width:2.6,depth:1.4,collision:true},
-  ...architectureModels,...faunaModels,...natureModels
+  ...architectureModels,...faunaModels,...natureModels,
+  'water-stilt':{asset:'waterside-stilt-house',width:5,depth:3.9,maxHeight:3.76,
+    collisionBoxes:[{x:0,z:.06,w:4.25,d:3.02}]},
+  'shore-stones':{asset:'waterside-shore-stones',width:2.6,depth:1.55,maxHeight:.782},
+  'reeds':{asset:'waterside-reeds',width:.96,depth:.96,maxHeight:1.27},
+  'water-lily':{asset:'waterside-lily',width:.77,depth:.77,maxHeight:.173},
+  'kingfisher':{asset:'waterside-kingfisher',width:.54,depth:.54,animal:true,restClip:'Perch',
+    radius:.42,maxHeight:.514,speed:.93,turnRate:1.8,stride:.54},
+  'frog':{asset:'waterside-frog',width:.50,depth:.50,animal:true,restClip:'Crouch',
+    radius:.33,maxHeight:.29,speed:.37,turnRate:1.7,stride:.59}
 };
 export const modelAsset=id=>modelDefinitions[id]?.asset??id;
 export function modelHeight(o){

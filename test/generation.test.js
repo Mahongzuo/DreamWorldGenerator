@@ -22,3 +22,20 @@ test('multi-plot generation preserves prior content, metadata and global cross-b
  assert.equal(Object.values(restored.regions).filter(r=>r.generation?.width===2).length,4);
  assert.equal(new Set([...restored.objects,...restored.strokes].map(o=>o.id)).size,restored.objects.length+restored.strokes.length);
 });
+
+test('filling a river mouth preserves roads, partial waterways and later hand-cut channels',()=>{
+ const old=preset('blank');
+ old.strokes=[{id:1,type:'jade',w:4,p:[[1,0],[15,0]]},{id:2,type:'dirtpath',w:1,p:[[1,0],[15,0]]}];
+ const initial=joinRegions([[0,0,old]]);
+ const mouth=world=>neighborPorts(world,1,0).find(p=>p.kind==='river');
+ const fill={id:3,type:'shore-fill',w:7,p:[[14,0],[15,0]]};
+ const filled={...initial,strokes:[...initial.strokes,fill]};
+ assert.equal(mouth(filled),undefined);
+ assert.equal(neighborPorts(filled,1,0).find(p=>p.kind==='road').type,'dirtpath');
+ const partly={...initial,strokes:[...initial.strokes,{...fill,w:2.3,p:[[13,1.8],[15,1.8]]}]};
+ assert.ok(mouth(partly).w<4 && mouth(partly).w>2 && mouth(partly).p[1]<0);
+ const cut={...filled,strokes:[...filled.strokes,{id:4,type:'brook',w:1.25,p:[[11,0],[15,0]]}]};
+ assert.ok(mouth(cut).w>.7&&mouth(cut).w<2);
+ const normalized=normalizeTerritory(JSON.parse(JSON.stringify(territoryEnvelope(cut))));
+ assert.deepEqual(normalized.strokes,cut.strokes);
+});

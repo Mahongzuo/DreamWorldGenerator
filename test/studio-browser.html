@@ -1,0 +1,120 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>建造台操作回归</title>
+<style>body{font:14px system-ui;background:#e4e8d9;color:#234133}pre{white-space:pre-wrap}iframe{display:block;border:1px solid #9faf98}</style>
+<h1>建造台操作回归</h1><pre id="result">正在运行…</pre><div id="frame"></div>
+<script type="module">
+import {STORE_KEY,ATLAS_KEY,preset} from '../src/sandbox-state.js';
+import {TERRITORY_KEY} from '../src/territory.js';
+const result=document.querySelector('#result'),lines=[];
+const boundedWait=async test=>{for(let i=0;i<160;i++){if(test())return;await new Promise(r=>setTimeout(r,40));}throw Error('等待界面超时');};
+function check(value,message){if(!value)throw Error(message);}
+function memoryWorld(){
+  const world=preset('blank');
+  world.strokes.push({id:1,type:'jade',w:2.2,p:[[-8,-8],[0,0],[8,8]]});
+  const entries=new Map([[STORE_KEY,JSON.stringify(world)],['linqi-quality','low']]);
+  return {get length(){return entries.size;},key:i=>Array.from(entries.keys())[i],getItem:k=>entries.get(k)??null,
+    setItem:(k,v)=>entries.set(k,String(v)),removeItem:k=>entries.delete(k)};
+}
+async function loadFrame(width,height,store){
+  const frame=document.createElement('iframe');
+  frame.width=width;frame.height=height;frame.title=width+'×'+height;document.querySelector('#frame').replaceChildren(frame);
+  const doc=frame.contentDocument,win=frame.contentWindow;
+  Object.defineProperty(win,'localStorage',{value:store,configurable:true});
+  doc.documentElement.lang='zh-CN';doc.body.innerHTML='<div id="app"></div>';
+  const script=doc.createElement('script');script.type='module';script.src='/src/main.js';doc.head.append(script);
+  await boundedWait(()=>doc.querySelector('#catalog .preset-card')&&doc.querySelector('#stage canvas'));
+  return {frame,doc,win,by:id=>doc.getElementById(id)};
+}
+function pointer({by,win},type,x,y){
+  const canvas=by('stage').querySelector('canvas'),rect=canvas.getBoundingClientRect();
+  // Synthetic events have no OS pointer capture. Input still passes through the real canvas raycast.
+  canvas.setPointerCapture=()=>{};
+  canvas.dispatchEvent(new win.PointerEvent(type,{
+    clientX:rect.left+rect.width*x,clientY:rect.top+rect.height*y,button:type==='pointermove'?-1:0,
+    buttons:type==='pointerup'?0:1,pointerId:10,pointerType:win.innerWidth<=900?'touch':'mouse',
+    isPrimary:true,bubbles:true,cancelable:true
+  }));
+}
+const nextFrame=win=>new Promise(resolve=>win.requestAnimationFrame(resolve));
+function expandEast({doc,by}){
+  by('map-mode').click();
+  doc.querySelector('[aria-label="预览向东扩建"]').click();
+  doc.querySelector('.frontier-panel [data-confirm]').click();
+}
+async function drawAcrossEastEdge(ctx,store){
+  const {by,doc,win}=ctx;
+  const before=JSON.parse(store.getItem(TERRITORY_KEY)).world;
+  check(before.regions['0,0']&&before.regions['1,0'],'向东扩建未连接两个地块');
+  if(!by('library').getClientRects().length)by('library-open').click();
+  doc.querySelector('[data-category="decor"]').click();
+  doc.querySelector('[data-item="stonepath"]').click();
+  if(by('library').getClientRects().length)by('collapse-library').click();
+  await nextFrame(win);
+  await nextFrame(win);
+  pointer(ctx,'pointerdown',.36,.53);
+  for(const x of [.41,.47,.53,.59,.66]){
+    pointer(ctx,'pointermove',x,.53);
+    await nextFrame(win);
+  }
+  pointer(ctx,'pointerup',.68,.53);
+  const after=JSON.parse(store.getItem(TERRITORY_KEY)).world;
+  check(after.strokes.length===before.strokes.length+1,'一次拖画应仅生成一条笔迹');
+  const road=after.strokes.at(-1);
+  check(road.type==='stonepath'&&road.p.length>=4&&road.id>Math.max(...before.strokes.map(s=>s.id)),'未保存本次手绘的石板路');
+  const startsWest=road.p[0][0]<14.8,endsEast=road.p.at(-1)[0]>15.2;
+  check(startsWest&&endsEast&&road.p.every(([,z])=>Math.abs(z)<11.4),'石板路没有横跨原点与东侧领地 '+JSON.stringify([road.p[0],road.p.at(-1)]));
+  return {road,bridge:after.objects.find(o=>o.type==='build-covered-bridge')};
+}
+async function run(width,height){
+  const store=memoryWorld(),mobile=width<=900,ctx=await loadFrame(width,height,store);
+  const {doc,by}=ctx,visible=el=>el.getClientRects().length>0;
+  check(doc.documentElement.scrollHeight<=height&&doc.documentElement.scrollWidth<=width,'页面溢出');
+  check(by('stage').clientHeight>=height*.55,'世界画布过小');
+  if(mobile)by('library-open').click();
+  check(visible(by('library')),'素材库未打开');
+  doc.querySelector('[data-item="build-covered-bridge"]').click();
+  by('top').click();
+  check(!mobile||!visible(by('library')),'手机选材后抽屉未收起');
+  by('rotate-tool').click();check(by('placement-meta').textContent.includes('45'),'旋转预览未更新');
+  by('continuous-tool').click();
+  await nextFrame(ctx.win);
+  pointer(ctx,'pointerdown',.5,.5);pointer(ctx,'pointerup',.5,.5);
+  const built=JSON.parse(store.getItem(STORE_KEY)).objects;
+  check(built.length===1&&built[0].type==='build-covered-bridge'&&Math.abs(built[0].a-Math.PI/4)<.01&&Math.hypot(built[0].x,built[0].z)<1,'未正常在河道上放置旋转后的廊桥');
+  check(by('stage').dataset.mode==='select'&&!by('undo').disabled,'单次放置后未选择');
+  if(mobile){by('properties-open').click();check(visible(by('properties')),'属性抽屉无法打开');by('close-properties').click();}
+  by('habitat-open').click();doc.querySelector('[data-shore-toggle]').click();by('journal-close').click();
+  check(!by('undo').disabled,'跳过栖地任务清除了建造历史');
+  by('undo').click();check(JSON.parse(store.getItem(STORE_KEY)).objects.length===0,'撤销放置失败');
+  check(JSON.parse(store.getItem(STORE_KEY)).game.shore.skipped,'撤销放置清除了游记设置');
+  by('redo').click();check(JSON.parse(store.getItem(STORE_KEY)).objects.length===1,'重做放置失败');
+  const previous=store.getItem(STORE_KEY);
+  by('map-mode').click();doc.querySelector('.frontier-panel [data-close]').click();
+  check(store.getItem(TERRITORY_KEY)===null&&store.getItem(STORE_KEY)===previous,'取消预览改变了存档');
+  expandEast(ctx);
+  check(Object.keys(JSON.parse(store.getItem(TERRITORY_KEY)).world.regions).length===2,'确认扩建失败');
+  by('undo').click();check(store.getItem(TERRITORY_KEY)===null,'撤销后连续存档仍在');
+  check(JSON.parse(store.getItem(ATLAS_KEY)).open===false,'撤销未返回起点');
+  const single=await loadFrame(width,height,store);
+  check(single.by('territory-status').textContent.includes('起点'),'重载复活了撤销的领地');
+  expandEast(single);
+  const {road,bridge}=await drawAcrossEastEdge(single,store);
+  check(bridge&&Math.abs(bridge.a-Math.PI/4)<.01,'扩建未保留旋转的廊桥');
+  const reloaded=await loadFrame(width,height,store);
+  check(reloaded.by('territory-status').textContent.includes('2 块'),'重载未恢复两块连续领地');
+  const restored=JSON.parse(store.getItem(TERRITORY_KEY)).world;
+  const saved=restored.strokes.find(s=>s.id===road.id),savedBridge=restored.objects.find(o=>o.id===bridge.id);
+  check(saved?.type===road.type&&JSON.stringify(saved.p)===JSON.stringify(road.p),'重载后跨界路被拆开或改变');
+  check(savedBridge?.type===bridge.type&&Math.abs(savedBridge.a-bridge.a)<.01&&Math.hypot(savedBridge.x-bridge.x,savedBridge.z-bridge.z)<.01,'重载后廊桥的模型、位置或朝向改变');
+  reloaded.by('explore').click();reloaded.by('quick-spawn').click();
+  check(reloaded.by('stage').dataset.mode==='walk'&&!visible(reloaded.by('buildbar')),'漫步时未收起建造界面');
+  reloaded.by('edit-view').click();reloaded.by('settings-open').click();
+  const rule=reloaded.by('game-mode');rule.value='adventure';rule.dispatchEvent(new reloaded.win.Event('change'));
+  check(reloaded.by('settings-open').textContent.includes('冒险')&&reloaded.by('undo').disabled,'规则切换和撤销提示不一致');
+  reloaded.by('settings-dialog').close();reloaded.by('scene-open').click();
+  check(reloaded.by('append-policy').textContent.includes('即时保存')&&reloaded.by('replace-policy').textContent.includes('即时保存'),'生成政策与玩法不一致');
+  reloaded.frame.remove();lines.push('PASS '+width+' × '+height+' · 已转向的廊桥 / 东扩后单笔石板路 x='+road.p[0][0]+' → '+road.p.at(-1)[0]+' / 读档逐点一致 / 撤销、游记与漫步');
+  result.textContent=lines.join('\n');
+}
+try{for(const [width,height] of [[1280,720],[390,844],[844,390]])await run(width,height);result.textContent+='\n全部通过';}
+catch(error){result.textContent=lines.concat('FAIL '+error.stack).join('\n');}
+</script></html>

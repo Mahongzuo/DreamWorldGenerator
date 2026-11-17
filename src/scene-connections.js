@@ -9,13 +9,74 @@ export function distanceToStroke(x,z,s){
  }
  return {distance:best,point};
 }
+// Match the midpoint quadratic strokes used by the canvas water mask. A tolerance of a few
+// centimetres is below one field pixel. This work runs only while querying ports on edited water.
+function smoothStroke(s){
+ const points=s.p;
+ if(points.length<3)return s;
+ const path=[points[0]];
+ for(let i=1;i<points.length-1;i++){
+  const a=path.at(-1),c=points[i],b=[(c[0]+points[i+1][0])/2,(c[1]+points[i+1][1])/2];
+  const n=Math.min(128,Math.max(1,Math.ceil(Math.sqrt(Math.hypot(a[0]-2*c[0]+b[0],a[1]-2*c[1]+b[1])/.08))));
+  for(let j=1;j<=n;j++){
+   const t=j/n,u=1-t;
+   path.push([u*u*a[0]+2*u*t*c[0]+t*t*b[0],u*u*a[1]+2*u*t*c[1]+t*t*b[1]]);
+  }
+ }
+ path.push(points.at(-1));
+ return {...s,p:path};
+}
+
+function remainingMouth(p,anchor,axis,width,edits,index){
+ // Along the lip, check which strips are still wet all the way from the old endpoint.
+ const tangent=1-axis,steps=17,travel=Math.max(1,Math.ceil(Math.hypot(p[0]-anchor[0],p[1]-anchor[1])/.25));
+ const segments=[];
+ let run=null;
+ for(let i=0;i<steps;i++){
+  const offset=((i+.5)/steps-.5)*width;
+  let wet=true;
+  for(let j=0;wet&&j<=travel;j++){
+   const point=[anchor[0]+(p[0]-anchor[0])*j/travel,anchor[1]+(p[1]-anchor[1])*j/travel];
+   point[tangent]+=offset;
+   for(const edit of edits){
+    if(edit.index<=index)break;
+    if(distanceToStroke(point[0],point[1],edit.stroke).distance>edit.stroke.w*.5)continue;
+    wet=edit.stroke.type!=='shore-fill';break;
+   }
+  }
+  if(wet){
+   if(!run){run={from:i,to:i+1};segments.push(run);}
+   else run.to=i+1;
+  }else run=null;
+ }
+ if(!segments.length)return null;
+ const mid=steps/2;
+ const open=segments.find(r=>r.from<mid&&r.to>mid)??segments.sort((a,b)=>(b.to-b.from)-(a.to-a.from))[0];
+ if(open.from===0&&open.to===steps)return {p,anchor,w:width};
+ const offset=((open.from+open.to)/(2*steps)-.5)*width,edge=[...p],join=[...anchor];
+ edge[tangent]+=offset;join[tangent]+=offset;
+ return {p:edge,anchor:join,w:Math.max(.55,width*(open.to-open.from)/steps)};
+}
+
 // Ports are inferred from editable strokes, so hand-drawn roads and rivers also connect.
 export function neighborPorts(world,x,z){
  const [sx,sz]=tileShift(x,z),ports=[];
+ let lastFill=-1;
+ const edits=[];
+ for(let i=world.strokes.length-1;i>=0;i--){
+  if(world.strokes[i].type==='shore-fill'){lastFill=i;break;}
+ }
+ if(lastFill>=0)for(let index=world.strokes.length-1;index>=0;index--){
+  const stroke=world.strokes[index];
+  if(stroke.type!=='shore-fill'&&channel(stroke)!=='river')continue;
+  const xs=stroke.p.map(p=>p[0]),zs=stroke.p.map(p=>p[1]),mx=LAND.x+stroke.w+4,mz=LAND.z+stroke.w+4;
+  if(Math.min(...xs)>sx+mx||Math.max(...xs)<sx-mx||Math.min(...zs)>sz+mz||Math.max(...zs)<sz-mz)continue;
+  edits.push({index,stroke:smoothStroke(stroke)});
+ }
  for(const [dx,dz] of [[-1,0],[1,0],[0,-1],[0,1]]){
   if(!world.regions[`${x+dx},${z+dz}`])continue;
   const axis=dx?0:1,edge=axis===0?sx+dx*LAND.x:sz+dz*LAND.z,tangent=axis===0?sz:sx,half=axis===0?LAND.z:LAND.x;
-  for(const s of world.strokes){
+  for(const [index,s] of world.strokes.entries()){
    const kind=channel(s);if(!kind)continue;
    let points=[];
    for(let i=0;i<s.p.length-1;i++){
@@ -27,9 +88,12 @@ export function neighborPorts(world,x,z){
     const outside=(p[axis]-edge)*(dx||dz);
     if(outside>=-.05&&outside<=3.1){const q=[...p];q[axis]=edge;points.push({p:q,anchor:p});}
    }
-   for(const {p,anchor} of points){
-    if(Math.abs(p[1-axis]-tangent)>half-1.2||ports.some(q=>q.kind===kind&&Math.hypot(q.p[0]-p[0],q.p[1]-p[1])<Math.max(1,s.w*.6)))continue;
-    ports.push({kind,type:s.type,w:s.w,p,anchor,dx,dz});
+   for(const endpoint of points){
+    const mouth=kind==='river'&&index<lastFill?remainingMouth(endpoint.p,endpoint.anchor,axis,s.w,edits,index):{...endpoint,w:s.w};
+    if(!mouth)continue;
+    const {p,anchor,w}=mouth;
+    if(Math.abs(p[1-axis]-tangent)>half-1.2||ports.some(q=>q.kind===kind&&Math.hypot(q.p[0]-p[0],q.p[1]-p[1])<Math.max(1,w*.6)))continue;
+    ports.push({kind,type:s.type,w,p,anchor,dx,dz});
    }
   }
  }

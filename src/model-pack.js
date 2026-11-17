@@ -26,6 +26,12 @@ function pump(){
     loaderPromise.then(async({loader,mergeGeometries})=>{
       const gltf=await loader.loadAsync(`/models/${modelAsset(id)}.glb`),parts=[];
       let material;
+      const restingClip=gltf.animations.find(clip=>clip.name===packModels[id].restClip);
+      const restMixer=restingClip?new T.AnimationMixer(gltf.scene):null;
+      if(restMixer){
+        restMixer.clipAction(restingClip).play();
+        restMixer.update(0);
+      }
       gltf.scene.updateMatrixWorld(true);
       gltf.scene.traverse(node=>{
         if(!node.isMesh)return;
@@ -38,6 +44,7 @@ function pump(){
       });
       const flat=parts.length?mergeGeometries(parts,false):null;
       parts.forEach(g=>g.dispose());
+      if(restMixer){restMixer.stopAllAction();restMixer.uncacheRoot(gltf.scene);}
       cache.set(id,{gltf,flat,material,refs:0,used:++clock});
       for(const ready of listeners)ready(id);
       resolve(gltf);trimCache();
@@ -71,12 +78,19 @@ export function createPackModel(def,o){
     const mixer=new T.AnimationMixer(model),actions={};
     for(const clip of gltf.animations){
       const name=clip.name.split('_')[0],action=mixer.clipAction(clip);
+      actions[name]=action;
+      if(meta.restClip)continue;
       action.play();action.setEffectiveWeight(name==='Walk'?0:1);
       // Different instances do not look around or flick their tails in lockstep.
       if(name==='Idle')action.time=((o.id*0.61803398875)%1)*clip.duration;
-      actions[name]=action;
     }
-    group.userData.packAnimation={mixer,actions,weight:0,stride:(meta.stride??.73)*sx,detail:true,model};
+    const state={mixer,actions,weight:0,stride:(meta.stride??.73)*sx,detail:true,model,restClip:meta.restClip};
+    group.userData.packAnimation=state;
+    if(meta.restClip){
+      state.active=actions[meta.restClip];
+      state.active.time=(Math.abs(o.id??0)*.61803398875%1)*state.active.getClip().duration;
+      state.active.play();mixer.update(0);
+    }
   }
   let disposed=false;
   group.userData.dispose=()=>{
@@ -92,9 +106,33 @@ export function setModelDetail(group,detailed){
   lod.near.visible=detailed;lod.far.visible=!detailed;
   if(group.userData.packAnimation)group.userData.packAnimation.detail=detailed;
 }
-export function animatePackModel(group,{delta=0,speed=0,travel=0}={}){
+function animateWaterside(state,delta,motion,phase,speed,travel){
+  let lift=0;
+  // Placed frogs share the visitors' pose clips. Ground locomotion uses actual distance
+  // for the spring and recovery, while visitors supply their own collision-tested arc.
+  if(!motion&&state.restClip==='Crouch'&&speed>.055){
+    const gait=travel/state.stride%1;
+    if(gait<.20){motion='Gather';phase=gait/.20;}
+    else if(gait<.78){motion='Leap';phase=(gait-.20)/.58;lift=.12*Math.sin(Math.PI*phase);}
+    else{motion='Settle';phase=(gait-.78)/.22;}
+  }
+  state.model.position.y=lift*state.model.scale.y;
+  const active=state.actions[motion]??state.actions[state.restClip];
+  if(state.active!==active){
+    const previous=state.active;
+    active.reset().play();
+    if(previous)previous.crossFadeTo(active,.075,false);
+    state.active=active;
+  }
+  active.paused=Number.isFinite(phase);
+  if(active.paused)active.time=T.MathUtils.clamp(phase,0,1)*active.getClip().duration;
+  state.mixer.update(delta);
+}
+
+export function animatePackModel(group,{delta=0,speed=0,travel=0,motion,phase}={}){
   const state=group.userData.packAnimation;
   if(!state||!delta||state.detail===false)return;
+  if(state.restClip){animateWaterside(state,delta,motion,phase,speed,travel);return;}
   const {mixer,actions}=state;
   state.weight=T.MathUtils.damp(state.weight,T.MathUtils.clamp(speed/.24,0,1),9,delta);
   if(actions.Walk){

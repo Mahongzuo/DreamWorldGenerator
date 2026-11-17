@@ -1,4 +1,10 @@
 const paths = {
+  history:'<path d="M3 11a9 9 0 1 1 2 7M3 5v6h6m3-4v6l4 2"/>',
+  close:'<path d="m6 6 12 12M18 6 6 18"/>',
+  landscape:'<rect x="2.5" y="4" width="19" height="16" rx="3"/><circle cx="8" cy="9" r="1.5"/><path d="m3 17 5-4 3 2 5-6 5 6"/>',
+  settings:'<path d="M3 6h7m4 0h7M3 12h12m4 0h2M3 18h2m4 0h12"/><circle cx="12" cy="6" r="2"/><circle cx="17" cy="12" r="2"/><circle cx="7" cy="18" r="2"/>',
+  rotate:'<path d="M4 10a8 8 0 1 1 1 7M3 5v6h6"/><path d="m10 13 2-2 3 3-2 2z"/>',
+  repeat:'<path d="M3 11V9a4 4 0 0 1 4-4h12m-3-3 3 3-3 3M21 13v2a4 4 0 0 1-4 4H5m3-3-3 3 3 3"/>',
   animal:'<path d="M4 16c0-2 3-3 4-5s2-3 4-3 3 1 4 3 4 3 4 5c0 3-4 4-8 1-4 3-8 2-8-1Z"/><circle cx="5" cy="8" r="1.5"/><circle cx="10" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="20" cy="8" r="1.5"/>',
   terrain:'<path d="m2 18 7-11 4 6 3-4 6 9H2Zm5-8 2 2 2-2"/>',
   walk:'<circle cx="13" cy="4" r="2"/><path d="m9 22 2-7-1-5 3-2 3 5 4 1m-10-4-4 3m5 2 5 3 1 4"/>',

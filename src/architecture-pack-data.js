@@ -146,7 +146,7 @@ export const architectureModels = {
   "build-covered-bridge": {
     "width": 7.2,
     "depth": 3.1,
-    "maxHeight": 3.475,
+    "maxHeight": 3.551,
     "solid": false,
     "fixedHeight": true
   },

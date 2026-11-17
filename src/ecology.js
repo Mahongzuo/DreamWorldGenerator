@@ -1,6 +1,6 @@
 import * as T from 'three';
 import {randFrom} from './model.js';
-import {biomeOf, inFootprint, items, tileShift} from './sandbox-state.js';
+import {biomeOf, items, tileShift} from './sandbox-state.js';
 import {makeWander, wander} from './navigation.js';
 import {architectureHeight} from './asset-models.js';
 import {drawDeer,hoofGround} from './deer.js';
@@ -97,6 +97,11 @@ export function buildEcology(world,field,region,nav,crowd) {
     const agent=makeWander(nav,x,z,.26,'water',phase,2.7,crowd);
     if(agent)ducks.push({agent,phase});
   }
+  // Only roofs under this flock's local flight path can affect its height.
+  const roofs=world.objects.filter(o=>items[o.type].category==='house'&&
+    Math.abs(o.x-originX)<12+Math.hypot(o.w,o.d)/2&&Math.abs(o.z-originZ+4.55)<10+Math.hypot(o.w,o.d)/2)
+    .map(o=>({x:o.x,z:o.z,c:Math.cos(o.a),s:Math.sin(o.a),w:o.w*.5+1.05,d:o.d*.5+1.05,
+      h:architectureHeight(items[o.type].form,o.w)+(o.type==='tower'?3:0)}));
   const flock=Array.from({length:7},(_,i)=>({a:i*.31+random()*.042,r:7.1+random()*.70,
     y:5.65+random()*1.4,rate:3.5+random()*1.4,s:.69+random()*.18}));
   const clouds=[
@@ -163,8 +168,11 @@ export function buildEcology(world,field,region,nav,crowd) {
       const angle=time*.165+bird.a+1.8;
       const x=originX+Math.cos(angle)*bird.r,z=originZ+Math.sin(angle)*bird.r*.79-4.55;
       const base=field.height(x,z);
-      const roof=world.objects.reduce((height,o)=>items[o.type].category==='house'&&inFootprint(x,z,o,1.05)
-        ? Math.max(height,architectureHeight(items[o.type].form,o.w)+(o.type==='tower'?3:0)) : height,0);
+      let roof=0;
+      for(const r of roofs){
+        const dx=x-r.x,dz=z-r.z;
+        if(Math.abs(r.c*dx-r.s*dz)<=r.w&&Math.abs(r.s*dx+r.c*dz)<=r.d)roof=Math.max(roof,r.h);
+      }
       const y=Math.max(bird.y+.32*Math.sin(angle*2+bird.a),roof+.45)+Math.max(0,base);
       const heading=Math.atan2(-Math.sin(angle),Math.cos(angle)*.79);
       const flap=Math.sin(time*bird.rate+bird.a*8)*.46;

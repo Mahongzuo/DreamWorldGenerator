@@ -1,0 +1,10 @@
+.frontier-pins{position:absolute;inset:0;pointer-events:none;z-index:8}
+.frontier-pin{position:absolute;transform:translate(-50%,-50%);min-width:46px;min-height:42px;padding:6px 12px;border:1px solid #e5dbb0;border-radius:99px;background:#33584cec;color:#fff8df;font:600 14px system-ui;box-shadow:0 2px 9px #24392e38;pointer-events:auto;cursor:pointer}
+.frontier-panel{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);z-index:10;max-width:calc(100% - 20px);width:max-content;display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid #d2d6be;border-radius:12px;background:#f6f4eaf5;color:#29463a;box-shadow:0 4px 18px #26342f25}
+.frontier-panel strong,.frontier-panel small{display:block}.frontier-panel small{font-size:11px;margin-top:3px}.frontier-panel button{white-space:nowrap}.frontier-panel[hidden],.frontier-pins[hidden]{display:none}
+.frontier-open .atlas-controls{visibility:hidden}
+@media(max-width:600px){.frontier-panel{bottom:8px;gap:5px;padding:7px 8px}.frontier-panel strong{font-size:13px}.frontier-panel .btn{padding:6px 8px}}
+
+.frontier-labels{position:absolute;inset:0;z-index:8;pointer-events:none;overflow:hidden}
+.frontier-labels span{position:absolute;transform:translate(-50%,-50%);padding:3px 7px;border-radius:5px;color:#fff8e1;background:#526955de;white-space:nowrap;font:600 12px system-ui;box-shadow:0 1px 4px #304c3f30}
+.frontier-labels [data-kind=road]{background:#94612e}.frontier-labels [data-kind=river]{background:#326a77}

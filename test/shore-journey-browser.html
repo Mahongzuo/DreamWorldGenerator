@@ -1,0 +1,127 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>水岸游记 · 玩家存档回归</title>
+<style>body{margin:12px;font:15px system-ui;background:#edf1e8;color:#234633}h1{font-size:18px;margin:0}pre{white-space:pre-wrap;font:13px system-ui}iframe{display:block;width:min(960px,98vw);height:min(590px,70vh);border:1px solid #b3c2a9}</style>
+<h1>水岸游记 · 观察、导出、导入与刷新</h1><pre id="result" role="status">准备独立测试世界…</pre><div id="frame"></div>
+<script type="module">
+import {ATLAS_KEY,preset} from '../src/sandbox-state.js';
+import {TERRITORY_KEY,joinRegions,territoryEnvelope} from '../src/territory.js';
+import {normalizeGame} from '../src/gameplay.js';
+
+const result=document.querySelector('#result'),lines=[];
+const frames=new Map(),tick=()=>new Promise(r=>setTimeout(r,65));
+const assert=(truth,message)=>{if(!truth)throw Error(message);};
+const log=message=>{lines.push(message);result.textContent=lines.join('\n');};
+async function until(read,message,ms=30000){
+  const end=performance.now()+ms;
+  for(;;){
+    const value=read();
+    if(value)return value;
+    if(performance.now()>end)throw Error(message);
+    await tick();
+  }
+}
+
+function memoryStore(){
+  const data=new Map([['linqi-quality','low'],[ATLAS_KEY,JSON.stringify({open:false,motion:false,x:0,z:0})]]);
+  return {get length(){return data.size;},key:i=>[...data.keys()][i],getItem:k=>data.get(k)??null,
+    setItem:(k,v)=>data.set(k,String(v)),removeItem:k=>data.delete(k),clear:()=>data.clear()};
+}
+const source=memoryStore(),destination=memoryStore();
+// There are no placed or preset animals. The only path to both observations is the live habitat simulation.
+// The regular path spawn is (0.1,5.45), on dry ground west of the river. Facing forward follows it north.
+const local={...preset('blank'),scene:'garden',biome:'ridge',seed:'SHORE-WALK-TEST',
+  objects:[{type:'reeds',id:1,x:1.25,z:5.45,w:.96,d:.96,a:0},
+    {type:'shore-stones',id:2,x:.4,z:-1.7,w:2.6,d:1.55,a:0}],
+  strokes:[{type:'jade',id:3,w:3.1,p:[[3.05,-9],[3.05,9]]}],game:normalizeGame()};
+source.setItem(TERRITORY_KEY,JSON.stringify(territoryEnvelope(joinRegions([[0,0,local]]))));
+window.shoreTestStore=name=>name==='source'?source:destination;
+window.shoreTestBooted=(name,doc)=>frames.set(name,doc);
+const makeDoc=name=>'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><div id="app"></div>'+
+  '<script>Object.defineProperty(window,"localStorage",{value:parent.shoreTestStore("'+name+'"),configurable:true});<\/script>'+
+  '<script type="module">import "/src/main.js";parent.shoreTestBooted("'+name+'",document);<\/script></html>';
+
+async function load(name){
+  const frame=document.createElement('iframe');frame.title='水岸游记测试世界';
+  frame.srcdoc=makeDoc(name);document.querySelector('#frame').replaceChildren(frame);
+  const doc=await until(()=>frames.get(name)&&frames.get(name)===frame.contentDocument&&frame.contentDocument,'游戏界面未加载');
+  assert(doc.querySelector('#stage canvas'),'无法启动 3D 视口');
+  return frame;
+}
+const by=(frame,id)=>frame.contentDocument.getElementById(id);
+const readWorld=store=>JSON.parse(store.getItem(TERRITORY_KEY))?.world;
+const visits=store=>readWorld(store)?.game?.shore?.visits??[];
+function key(frame,key,type){
+  by(frame,'stage').dispatchEvent(new frame.contentWindow.KeyboardEvent(type,{
+    key,code:'Key'+key.toUpperCase(),bubbles:true,cancelable:true
+  }));
+}
+async function note(frame,type,label){
+  await until(()=>!by(frame,'observe').hidden&&by(frame,'nearby').textContent.includes(label),'岸边未找到'+label+'；当前提示为 '+by(frame,'nearby').textContent);
+  key(frame,'e','keydown');key(frame,'e','keyup');
+  return await until(()=>visits(source).find(v=>v.type===type),'观察未写入'+label+'的世界级游记');
+}
+const checkNotes=(actual,expected)=>{
+  assert(actual.length===2,'游记条数不对');
+  assert(JSON.stringify(actual)===JSON.stringify(expected),'物种或目击坐标在存档边界发生改变');
+  assert(actual.every(n=>Number.isFinite(n.x)&&Number.isFinite(n.z)),'目击坐标缺失');
+  assert(new Set(actual.map(n=>n.type)).size===2,'两条目击属于同一物种');
+};
+function openNotes(frame){
+  by(frame,'habitat-open').click();
+  const section=by(frame,'habitat-panel');
+  assert(section.querySelector('h4')?.textContent.includes('2 / 2'),'手记未显示整页完成');
+  assert(section.querySelectorAll('.shore-notes li').length===2,'游记未呈现两个地点');
+  assert(section.textContent.includes('池蛙')&&section.textContent.includes('翠鸟')&&section.textContent.includes('地块 0,0'),'手册缺少物种或地点');
+  by(frame,'journal-close').click();
+}
+
+async function run(){
+  const first=await load('source');
+  by(first,'explore').click();by(first,'quick-spawn').click();
+  assert(by(first,'stage').dataset.mode==='walk','未进入第三人称');
+  const frog=await note(first,'frog','池蛙');
+  log('PASS 第三人称靠近芦苇，E 观察自然到访的池蛙 ('+frog.x.toFixed(1)+', '+frog.z.toFixed(1)+')');
+  key(first,'w','keydown');
+  try{await until(()=>!by(first,'observe').hidden&&by(first,'nearby').textContent.includes('翠鸟'),'沿岸漫步未找到停栖翠鸟');}
+  finally{key(first,'w','keyup');}
+  const bird=await note(first,'kingfisher','翠鸟');
+  log('PASS 沿岸移动，E 观察已降落的翠鸟 ('+bird.x.toFixed(1)+', '+bird.z.toFixed(1)+')');
+  const expected=visits(source);
+  by(first,'edit-view').click();openNotes(first);
+
+  // Capture only the browser's final download side effect. The real export builds, serializes
+  // and names the file. Import below receives the actual bytes from that object URL.
+  const win=first.contentWindow,original=win.HTMLAnchorElement.prototype.click;
+  let download;
+  win.HTMLAnchorElement.prototype.click=function(){
+    if(this.download==='linqi-territory.json'){download=win.fetch(this.href).then(r=>r.blob());return;}
+    return original.call(this);
+  };
+  by(first,'settings-open').click();
+  try{by(first,'share').click();}finally{win.HTMLAnchorElement.prototype.click=original;}
+  assert(download,'没有触发领地 JSON 下载');
+  const blob=await download,text=await blob.text(),payload=JSON.parse(text);
+  checkNotes(payload.world.game.shore.visits,expected);
+  assert(payload.world.objects.every(o=>o.type!=='frog'&&o.type!=='kingfisher'),'野生来客被错误导出为玩家物件');
+  log('PASS 通过「导出 / 分享」获得真实 JSON，两条目击完整');
+
+  const other=await load('destination');
+  assert(!destination.getItem(TERRITORY_KEY)&&!visits(destination).length,'导入目标未隔离');
+  const w=other.contentWindow,files=new w.DataTransfer();
+  files.items.add(new w.File([text],'linqi-territory.json',{type:'application/json'}));
+  by(other,'settings-open').click();
+  const input=by(other,'import-file');
+  input.files=files.files;input.dispatchEvent(new w.Event('change',{bubbles:true}));
+  await until(()=>visits(destination).length===2&&!by(other,'settings-dialog').open,'真实导入流程失败');
+  checkNotes(visits(destination),expected);openNotes(other);
+  log('PASS 导入到另一份空白存储，从田野手记读回物种与地点');
+
+  const lastDoc=other.contentDocument;
+  other.contentWindow.location.reload();
+  await until(()=>frames.get('destination')!==lastDoc&&frames.get('destination')===other.contentDocument,'刷新后游戏未重新启动');
+  checkNotes(visits(destination),expected);openNotes(other);
+  log('PASS 真实刷新后，两条记录与完成页仍可打开');
+  result.dataset.status='pass';log('全部通过');
+}
+try{await run();}catch(error){result.dataset.status='fail';log('FAIL '+error.message);console.error(error);}
+</script></html>

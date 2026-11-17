@@ -1,3 +1,4 @@
+import {bridgeFit} from './bridge-fit.js';
 import {isTraversable,worldTraversalBoxes,traversalAnchor} from './traversal-shapes.js';
 import {modelDefinitions,modelHeight,collisionParts} from './asset-registry.js';
 import {inside,inFootprint,isSolid,isTree,items,tileInside} from './sandbox-state.js';
@@ -6,7 +7,7 @@ import {bridgeRise,architectureHeight} from './asset-models.js';
 const size=3;
 const key=(x,z)=>Math.floor(x/size)+','+Math.floor(z/size);
 export function createNavigation(world,field,region,trees,bridges){
-  const grid=new Map(), deckGrid=new Map(), terrainBounds=region?.bounds??(region?tileInside:inside);
+  const grid=new Map(), deckGrid=new Map(), passageGrid=new Map(), terrainBounds=region?.bounds??(region?tileInside:inside);
   const obstacles=world.objects.filter(o=>isSolid(o)||isTree(o.type));
   const crossings=obstacles.filter(o=>items[o.type].form==='bridge');
   const allTrees=[...trees,...obstacles.filter(o=>isTree(o.type)).map(o=>({x:o.x,z:o.z,r:modelDefinitions[o.type]?.treeRadius?modelDefinitions[o.type].treeRadius*o.w/modelDefinitions[o.type].width:o.w*.10,id:o.id,type:o.type,crown:Math.max(o.w,o.d)*.62}))];
@@ -23,8 +24,38 @@ export function createNavigation(world,field,region,trees,bridges){
     const margin=items[o.type].category==='house'?.18:0;
     for(const part of collisionParts(o))add(grid,{object:part,margin},part.x,part.z,Math.hypot(part.w,part.d)*.5+margin);
   }
+  // Dimensions follow the authored wooden planks, parapets and circular opening.
+  for(const o of obstacles){
+    if(!['build-covered-bridge','build-moon-gate'].includes(o.type))continue;
+    const bridge=o.type==='build-covered-bridge',c=Math.cos(o.a),s=Math.sin(o.a);
+    const {base,slope}=bridge?bridgeFit(field,o):{base:field.height(o.x,o.z),slope:0};
+    add(passageGrid,{o,base,slope,c,s,bridge},o.x,o.z,Math.hypot(o.w,o.d)/2);
+    if(!bridge)continue;
+    for(const side of [-1,1]){
+      const offset=side*1.02*o.d/3.1;
+      const rail={...o,x:o.x+s*offset,z:o.z+c*offset,w:o.w*.96,d:.12*o.d/3.1};
+      add(grid,{object:rail,margin:0},rail.x,rail.z,Math.hypot(rail.w,rail.d)/2);
+    }
+  }
+  function passageAt(x,z,r,method){
+    let value=method==='floor'?-Infinity:Infinity;
+    for(const {o,base,slope,c,s,bridge} of passageGrid.get(key(x,z))??[]){
+      const dx=x-o.x,dz=z-o.z,lx=Math.abs(c*dx-s*dz),lz=Math.abs(s*dx+c*dz);
+      if(bridge){
+        if(method==='ceiling'&&lx<o.w*.465+r&&lz<o.d*.45+r)value=Math.min(value,base+(c*dx-s*dz)*slope+2.64);
+        continue;
+      }
+      if(lz>o.d*.27/2.4+r||lx>=o.w/6.2)continue;
+      const sy=Math.sqrt(o.w/6.2*o.d/2.4),offset=Math.min(1,(lx+r)/(o.w/6.2));
+      const half=Math.sqrt(1-offset*offset);
+      if(method==='floor')value=Math.max(value,base+(1.1-half)*sy);
+      else value=Math.min(value,base+(1.1+half)*sy);
+    }
+    return value;
+  }
+  const ceilingAt=(x,z,r)=>passageAt(x,z,r,'ceiling');
   for(const tree of allTrees)add(grid,{tree},tree.x,tree.z,tree.crown??tree.r);
-  for(const o of crossings)add(deckGrid,{object:o},o.x,o.z,Math.hypot(o.w,o.d)*.5);
+  for(const o of crossings)add(deckGrid,{object:o,fit:bridgeFit(field,o)},o.x,o.z,Math.hypot(o.w,o.d)*.5);
   for(const piece of bridges)add(deckGrid,{piece},piece.x,piece.z,piece.w*.5+.2);
   function nearby(x,z,r){
     const found=new Set();
@@ -47,6 +78,7 @@ export function createNavigation(world,field,region,trees,bridges){
     let deepest=null;
     for(const entry of nearby(x,z,r)){if(entry.surface&&Number.isFinite(y)&&(y>=entry.top-.012||y+height<=entry.bottom+.01))continue;const hit=shapeContact(entry,x,z,r);if(hit&&(!deepest||hit.depth>deepest.depth))deepest=hit;}
     if(deepest)return deepest;
+    if(Number.isFinite(y)&&y+height>ceilingAt(x,z,r)+.015)return {x:0,z:0,depth:.01};
     const allowed=(a,b)=>terrainBounds(a,b,r+.03)&&(deck(a,b,r)!==null||[[0,0],[-r,0],[r,0],[0,-r],[0,r]].every(([dx,dz])=>field.depth(a+dx,b+dz)<=.42));
     if(allowed(x,z))return null;
     // Sample the boundary's outward gradient; handles shorelines and unowned territory.
@@ -55,7 +87,7 @@ export function createNavigation(world,field,region,trees,bridges){
     const length=Math.hypot(nx,nz);return length?{x:nx/length,z:nz/length,depth:.01}:{x:0,z:0,depth:.01};
   }
   function support(x,z,r=.30,ceiling=Infinity){
-    let floor=deck(x,z,r)??field.height(x,z);
+    let floor=Math.max(deck(x,z,r)??field.height(x,z),passageAt(x,z,r,'floor'));
     for(const entry of nearby(x,z,r))if(entry.surface&&entry.top<=ceiling+.015&&entry.top>floor&&shapeContact(entry,x,z,r))floor=entry.top;
     return floor;
   }
@@ -63,7 +95,7 @@ export function createNavigation(world,field,region,trees,bridges){
   function sourceToken(id){const o=sourceObjects.get(id);return o?[o.type,o.x,o.z,o.w,o.d,o.a,traversalAnchor(field,o)].join('/'):null;}
   function surfaceAt(x,z,r=.30,top=Infinity){return [...nearby(x,z,r)].filter(e=>e.surface&&Math.abs(e.top-top)<.04&&inFootprint(x,z,e.object,-r));}
   function cameraBlocked(x,y,z,r=.18){
-    if(y-r<(deck(x,z,r)??field.height(x,z)))return true;
+    if(y-r<(deck(x,z,r)??field.height(x,z))||y+r>=ceilingAt(x,z,r)&&y-r<ceilingAt(x,z,r)+.85)return true;
     for(const entry of nearby(x,z,r)){
       if(!shapeContact(entry,x,z,r))continue;
       const o=entry.object,t=entry.tree,base=field.height(o?.x??t.x,o?.z??t.z);
@@ -87,11 +119,12 @@ export function createNavigation(world,field,region,trees,bridges){
     return false;
   }
   function deck(x,z,r=0){
-    for(const {object:o,piece} of deckGrid.get(key(x,z))??[]){
+    for(const {object:o,piece,fit} of deckGrid.get(key(x,z))??[]){
       if(o){
-        if(!inFootprint(x,z,o,-Math.min(r,.20)))continue;
+        if(!inFootprint(x,z,o,o.type==='build-covered-bridge'?0:-Math.min(r,.20)))continue;
+        if(o.type==='build-covered-bridge'&&Math.abs(Math.sin(o.a)*(x-o.x)+Math.cos(o.a)*(z-o.z))+r*.55>o.d*1.075/3.1)continue;
         const local=Math.cos(o.a)*(x-o.x)-Math.sin(o.a)*(z-o.z);
-        const anchor=field.depth(o.x,o.z)>.56?field.level:field.height(o.x,o.z);
+        const anchor=fit.base+fit.slope*local;
         return anchor+bridgeRise(local,o.w)+.012;
       }
       const dx=x-piece.x,dz=z-piece.z,c=Math.cos(piece.a),s=Math.sin(piece.a);
@@ -122,7 +155,7 @@ export function createNavigation(world,field,region,trees,bridges){
     }
     return null;
   }
-  return {valid,sweep,find,contact,cameraBlocked,support,bodyContact:(x,y,z,r=.30,h=1.65)=>contact(x,z,r,y,h),surfacesNear:(x,z,r)=>[...nearby(x,z,r)].filter(e=>e.surface),surfaceAt,sourceToken,trees:allTrees,height(x,z){return deck(x,z)??field.height(x,z);}};
+  return {valid,sweep,find,contact,cameraBlocked,support,ceilingAt,bodyContact:(x,y,z,r=.30,h=1.65)=>contact(x,z,r,y,h),surfacesNear:(x,z,r)=>[...nearby(x,z,r)].filter(e=>e.surface),surfaceAt,sourceToken,trees:allTrees,height(x,z){return deck(x,z)??field.height(x,z);}};
 }
 
 // The same index holds wildlife and placed animals. Flights and swimmers occupy separate layers.

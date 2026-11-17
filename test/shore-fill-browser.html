@@ -1,0 +1,45 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>局部填土与复湿</title>
+<style>body{font:16px system-ui;color:#234433;background:#edf2e5;padding:20px}pre{line-height:1.6;white-space:pre-wrap}</style>
+<h1>局部填土与复湿</h1><pre id="result">正在构建真实水深、纹理、导航和来客…</pre>
+<script type="module">
+import {createKit,disposeGroup} from '../src/model.js';
+import {buildLand} from '../src/sandbox-model.js';
+import {createAnimalCrowd} from '../src/navigation.js';
+import {createShoreVisitors} from '../src/shore-visitors.js';
+import {preset} from '../src/sandbox-state.js';
+const out=document.querySelector('#result'),lines=[],kit=createKit();
+const check=(v,msg)=>{if(!v)throw Error(msg);lines.push('PASS '+msg);};
+try{
+ const old={...preset('blank'),scene:'garden',biome:'ridge',objects:[{id:1,type:'reeds',x:-1.9,z:0,w:.96,d:.96,a:0},
+   {id:2,type:'shore-stones',x:2,z:0,w:2.6,d:1.55,a:0},{id:3,type:'mallard',x:0,z:5.5,w:.55,d:.55,a:0}],
+   strokes:[{id:4,type:'jade',w:2.75,p:[[0,-8],[0,8]]},{id:5,type:'stonepath',w:1.15,p:[[-6,.7],[-2.65,.7]]}]};
+ const actors=createShoreVisitors({makeModel:()=>({}),removeModel(){},paintModel(){}}),center={x:0,z:0};
+ let land,field,nav;
+ function apply(world){
+   if(land)disposeGroup(land);
+   land=buildLand(kit,world,{x:0,z:0,coarse:true,continuous:true,resolution:32});
+   ({field,navigation:nav}=land.userData);
+   actors.update(world,field,nav,createAnimalCrowd(),center);
+   for(let i=0;i<180;i++)actors.step(1/30,false,center,true);
+ }
+ function alphaAtCenter(){
+   const plane=land.children.find(o=>o.material?.map?.isCanvasTexture);
+   const c=plane.material.map.image;
+   return c.getContext('2d').getImageData(c.width/2,c.height/2,1,1).data[3];
+ }
+ apply(old);
+ check(field.depth(0,0)>.8&&alphaAtCenter()===255&&nav.valid(0,0,.2,'water'),'原河道同时有水面、水深与游泳空间');
+ check(actors.targets().length===2,'真实岸地吸引池蛙和翠鸟');
+ const wetY=field.height(0,0);
+ // A seven-metre-wide stretch along the banks removes all water near these two habitat anchors.
+ const fill={id:6,type:'shore-fill',w:7,p:[[-.1,-3],[-.1,0],[-.1,3]]};
+ const filled={...old,strokes:[...old.strokes,fill]};apply(filled);
+ check(field.depth(0,0)===0&&alphaAtCenter()===0&&field.height(0,0)>wetY+.15&&nav.valid(0,0,.25,'land'),'局部填土抬起干地，清除水面并支持步行');
+ check(field.depth(0,7.7)>.7 && !nav.valid(0,0,.2,'water'),'未涂远端仍有活水');
+ check(field.paint(-3.0,.7)==='stonepath'&&filled.objects.some(o=>o.type==='mallard'),'既有石径与手放动物保留');
+ check(actors.count()===0,'失去近岸水源，两种野生访客离开');
+ apply({...filled,strokes:[...filled.strokes,{id:7,type:'brook',w:2.75,p:[[0,-8],[0,8]]}]});
+ check(field.depth(0,0)>.8&&alphaAtCenter()===255&&nav.valid(0,0,.2,'water')&&actors.targets().length===2,'后来重绘的溪流恢复可见水面、游泳空间和两种访客');
+ out.dataset.status='pass';out.textContent=lines.concat('全部通过').join('\n');
+}catch(e){out.dataset.status='fail';out.textContent=lines.concat('FAIL '+e.stack).join('\n');}
+</script></html>

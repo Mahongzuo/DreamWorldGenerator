@@ -1,0 +1,10 @@
+#habitat-panel{color:var(--ink,#284636);width:100%;text-align:left;font-size:.84rem}
+.shore-heading,.shore-species header,.shore-notes h4{display:flex;align-items:center;justify-content:space-between;gap:.65rem}
+.shore-heading h3,.shore-notes h4{margin:0;color:inherit}
+.shore-heading button{white-space:nowrap}
+.shore-intro,.shore-notes p,.shore-held{margin:.45rem 0 .65rem;line-height:1.5;color:#54685b}
+.shore-cards{display:grid;gap:.45rem}.shore-species{padding:.6rem .7rem;background:#f1f4e8;border-radius:9px;border:1px solid #dbe3cf}
+.shore-species header small,.shore-notes h4 span{color:#566c57;font-size:.75rem}
+.shore-conditions{display:flex;flex-wrap:wrap;gap:.25rem .7rem;margin-top:.23rem;font-size:.77rem}
+.shore-conditions span{color:#6b6255}.shore-conditions [data-met="true"]{color:#426641}
+.shore-notes{margin-top:.8rem}.shore-notes ul{display:grid;gap:.32rem;list-style:none;margin:.4rem 0;padding:0}.shore-notes li{display:flex;gap:.6rem;align-items:baseline;flex-wrap:wrap}.shore-notes li span{font-size:.76rem;color:#607067}

@@ -33,9 +33,9 @@
       "width": 7.2,
       "depth": 3.1,
       "category": "house",
-      "triangles": 1786,
+      "triangles": 3878,
       "meshes": 1,
-      "bytes": 162624
+      "bytes": 340616
     },
     {
       "id": "build-teahall",

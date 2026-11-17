@@ -1,3 +1,5 @@
+import {planTraversal} from './traversal-motion.js';
+import {createFrontierOverlay} from './frontier-render.js';
 import {CHARACTER,createCharacter,stepCharacter,requestJump,releaseJump,stopCharacter,cameraSweep,cameraDistance} from './character-controller.js';
 import {createAdventureActors} from './adventure-actors.js';
 import {animalProfile} from './animal-behavior.js';
@@ -5,9 +7,11 @@ import {modelDefinitions,modelHeight,collisionParts} from './asset-registry.js';
 import * as T from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {createKit, disposeGroup} from './model.js';
-import {buildLand, buildObject, objectHeight} from './sandbox-model.js';
+import {buildLand, buildObject, objectHeight, alignBridge} from './sandbox-model.js';
 import {baseHeight, flyingAnimal, footprint, inFootprint, items, LAND, MAX_POINTS, themes, tileKey, tileShift, waterAnimal} from './sandbox-state.js';
 import {buildEcology} from './ecology.js';
+import {createShoreVisitors} from './shore-visitors.js';
+import {findResidentRefuge} from './shore-habitat.js';
 import {architectureHeight} from './asset-models.js';
 import {buildAvatar} from './creatures.js';
 import {createAnimalCrowd,makeWander,wander} from './navigation.js';
@@ -102,6 +106,20 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
   let crowd=createAnimalCrowd(),playerBody=null;
   const continuousLand=createContinuousLand(kit);
   const objects=new Map();
+  let heldResidents=0,ecologyDebt=0;
+  const shoreVisitors=createShoreVisitors({
+    makeModel(type,id,w,field){
+      const def=items[type],o={type,id:id+100000,w:def.width,d:def.depth??def.width,x:0,z:0,a:0};
+      const mesh=buildObject(kit,o,w,field);scene.add(mesh);return mesh;
+    },
+    removeModel:disposeGroup,
+    paintModel(group,pose){
+      group.position.set(pose.x,pose.y,pose.z);group.rotation.y=pose.heading;
+      setModelDetail(group,pose.detail);
+      animatePackModel(group,{delta:pose.delta,motion:pose.motion,phase:pose.phase});
+    },
+    onReport:report=>onGame({type:'habitat',report})
+  });
   const adventure=createAdventureActors(scene,onGame);let gameStatusClock=0,inputSuspended=false;
   window.addEventListener('blur',()=>{inputSuspended=true;clearMovement();adventure.pause();});
   window.addEventListener('focus',()=>{inputSuspended=false;schedule();});
@@ -125,24 +143,29 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     last=now;
     if(playing&&!inputSuspended&&!document.querySelector('dialog[open]')){walk(delta);
       if(world.game?.health!==0)adventure.step(delta,player);
-      gameStatusClock-=delta;if(gameStatusClock<=0){gameStatusClock=.2;onGame({type:'status',text:adventure.nearby(player)});}
+      gameStatusClock-=delta;if(gameStatusClock<=0){gameStatusClock=.2;onGame({type:'status',...adventure.status(player)});}
     }
     else controls.update(delta);
-    if(region?.continuous&&!playing){
+    if(region?.continuous&&!playing&&!frontierView){
       const [x,z]=regionAt(controls.target.x,controls.target.z);
       if((x!==region.x||z!==region.z)&&region.claimed(x,z)){
         onRegion(x-region.x,z-region.z,true);update(world,{...region,x,z});
       }
     }
-    if((living||playing)&&ecology){
-      if(living){time+=delta;kit.time.value=time;}
-      ecology.step(time,world.light,living?delta:0);
-      stepAnimals(living?delta:0);
-      if(renderer.shadowMap.enabled&&living&&time-lastShadow>.25){renderer.shadowMap.needsUpdate=true;lastShadow=time;}
+    if(living&&ecology){
+      time+=delta;kit.time.value=time;
+      ecologyDebt+=delta;
+      if(ecologyDebt>=(quality==='low'?1/18:1/30)){
+        ecology.step(time,world.light,ecologyDebt);
+        ecologyDebt=0;
+      }
+      stepAnimals(delta);
+      if(renderer.shadowMap.enabled&&time-lastShadow>.25){renderer.shadowMap.needsUpdate=true;lastShadow=time;}
     }
+    shoreVisitors.step(delta,living,playing?player:controls.target,quality==='low');
     draw();
     if(playing||controls.autoRotate) schedule();
-    else if(living&&!pending)lifeTimer=setTimeout(schedule,28);
+    else if((living||shoreVisitors.moving())&&!pending)lifeTimer=setTimeout(schedule,living?28:60);
   }
   function resize(){
     const {width,height}=stage.getBoundingClientRect();
@@ -249,9 +272,36 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     const ground=f.height(x,z);
     return f.depth(x,z)>.61?Math.max(f.level,ground):ground;
   }
+  let frontierView=null;
+  function frameFrontier(edge){
+    if(!frontierView)frontierView={x:controls.target.x,z:controls.target.z,zoom:camera.zoom};
+    const [cx,cz]=tileShift(edge.x,edge.z);
+    focusPoint(edge.edgeX+edge.dx*LAND.x*.36,edge.edgeZ+edge.dz*LAND.z*.36);
+    camera.zoom=1;camera.updateProjectionMatrix();camera.updateMatrixWorld();
+    const points=[[cx-LAND.x,cz-LAND.z],[cx+LAND.x,cz-LAND.z],[cx+LAND.x,cz+LAND.z],[cx-LAND.x,cz+LAND.z],[edge.edgeX-edge.dx*LAND.x*.8,edge.edgeZ-edge.dz*LAND.z*.8]];
+    let factor=1.5;for(const [x,z] of points){
+      const n=projectGround(x,z);factor=Math.min(factor,.43/(Math.abs(n.x-.5)||.001),.33/(Math.abs(n.y-.5)||.001));
+    }
+    camera.zoom=factor;camera.updateProjectionMatrix();controls.update();schedule();
+  }
+  function releaseFrontier(){
+    if(!frontierView)return;
+    const saved=frontierView;frontierView=null;
+    camera.zoom=saved.zoom;camera.updateProjectionMatrix();focusPoint(saved.x,saved.z);
+  }
+  const frontierOverlay=createFrontierOverlay(scene,visibleGround);
+  function focusPoint(x,z){
+    camera.position.x+=x-controls.target.x;camera.position.z+=z-controls.target.z;
+    controls.target.x=x;controls.target.z=z;controls.update();schedule();
+  }
+  function projectGround(x,z){
+    const p=localHit.set(x,visibleGround(x,z)+.18,z).project(camera);
+    return {x:(p.x+1)*.5,y:(1-p.y)*.5};
+  }
   function cursor(p,r=0.38,valid=true){
     marker.visible=Boolean(p);
     if(p){
+      if(!playing&&p.inside!==false)shoreVisitors.watch(p);
       marker.material.color.set(valid?'#fff0b2':'#fa9987');
       marker.position.set(p.x,visibleGround(p.x,p.z)+.045,p.z);
       marker.scale.set(r,r,1);
@@ -291,6 +341,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     } else {
       previewObject.position.set(o.x,objectHeight(land.userData.field,o),o.z);
       previewObject.rotation.y=o.a;
+      if(items[o.type].form==='bridge')alignBridge(previewObject,land.userData.field,o);
     }
     hiddenObject=source?.group;
     if(hiddenObject) hiddenObject.visible=false;
@@ -355,7 +406,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
       const oldLand=land;
       land=region?.continuous?continuousLand.update(next,region,quality):buildLand(kit,next,region);
       scene.add(land);
-      if(oldLand&&oldLand!==land)disposeGroup(oldLand);
+      if(oldLand&&oldLand!==land){if(oldLand===continuousLand.group)continuousLand.clear();else disposeGroup(oldLand);}
       worldForBorder=next;updateBorder();
       ecology?.dispose();
       crowd=createAnimalCrowd();playerBody=null;
@@ -374,15 +425,16 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
         const entry=objects.get(o.id);
         if(entry){
           if(items[o.type].category==='animal'){
-            if(landChange||!entry.agent)bindAnimal(entry);
-          }else entry.group.position.y=objectHeight(land.userData.field,o);
+            if(landChange||!entry.agent)bindAnimal(entry,next);
+          }else if(items[o.type].form==='bridge')alignBridge(entry.group,land.userData.field,o);
+          else entry.group.position.y=objectHeight(land.userData.field,o);
         }else{
           const group=buildObject(kit,o,next,land.userData.field);
           scene.add(group);
           const made={group,object:o,agent:null,spinners:[]};
           group.traverse(child=>{if(child.userData.spin)made.spinners.push(child);});
           objects.set(o.id,made);
-          if(items[o.type].category==='animal')bindAnimal(made);
+          if(items[o.type].category==='animal')bindAnimal(made,next);
         }
       }
     }
@@ -430,6 +482,8 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
       if(avatar.group.visible)avatar.group.position.y=land.userData.navigation.support(player.x,player.z,CHARACTER.radius,player.y+.32);
     }
     if(playing)adventure.sync(next,land.userData.navigation,crowd,player);
+    if(landChange||objectsChanged)heldResidents=[...objects.values()].filter(e=>items[e.object.type].category==='animal'&&!e.agent).length;
+    shoreVisitors.update(next,land.userData.field,land.userData.navigation,crowd,{x:(region?.x??0)*30,z:(region?.z??0)*22.8},heldResidents);
     updateAnimalDetail();schedule();
   }
   function cameraMode(on){
@@ -445,16 +499,21 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
   const typeOf=o=>waterAnimal(o)?'water':flyingAnimal(o)?'fly':'land';
   const animalRadius=o=>animalProfile(o).radius;
 
-  function bindAnimal(entry){
+  function bindAnimal(entry,next){
     const {object:o,group}=entry;
     const nav=land.userData.navigation;
     const previous=entry.agent;
     previous?.crowd?.remove(previous);
-    entry.agent=makeWander(nav,previous?.x??o.x,previous?.z??o.z,animalRadius(o),typeOf(o),previous?.heading??o.a,2.0+o.w*.65,crowd);
+    const radius=animalRadius(o),kind=typeOf(o),seed=previous?.heading??o.a,range=2+o.w*.65;
+    entry.agent=makeWander(nav,previous?.x??o.x,previous?.z??o.z,radius,kind,seed,range,crowd);
+    if(!entry.agent){
+      const refuge=findResidentRefuge(nav,crowd,o,radius,kind,next);
+      if(refuge)entry.agent=makeWander(nav,refuge.x,refuge.z,radius,kind,seed,range,crowd);
+    }
     if(entry.agent)entry.agent.random=(Math.floor(o.id*18317+o.x*151+o.z*871)>>>0)||1;
     if(entry.agent){
       entry.agent.profile=animalProfile(o);
-      entry.agent.homeX=o.x;entry.agent.homeZ=o.z;
+      if(nav.valid(o.x,o.z,radius,kind)){entry.agent.homeX=o.x;entry.agent.homeZ=o.z;}
       group.visible=true;
       placeAnimal(entry,time);
     }else group.visible=false;
@@ -507,7 +566,11 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
           wander(nav,a,step,speed);placeAnimal(entry,time);
         }
       }
-      animatePackModel(entry.group,{delta:dt,speed:a?.speed??0,travel:a?.travel??0,time});
+      entry.poseDebt=(entry.poseDebt??0)+dt;
+      if(entry.poseDebt>=(entry.onScreen===false?.16:quality==='low'?1/22:1/40)){
+        animatePackModel(entry.group,{delta:entry.poseDebt,speed:a?.speed??0,travel:a?.travel??0,time,motion:o.type==='kingfisher'?'Fly':undefined});
+        entry.poseDebt=0;
+      }
       for(const spinner of entry.spinners)spinner.rotation.z-=dt*spinner.userData.spin;
     }
   }
@@ -548,7 +611,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     playerBody.x=player.x;playerBody.z=player.z;playerBody.y=player.y;playerBody.h=CHARACTER.height;crowd.update(playerBody);
   }
   function clearMovement(){movement.clear();analog={side:0,forward:0};runLatch=false;stopCharacter(player);onGame({type:'controls-reset'});}
-  let waterSoundClock = 0;
+  let waterSoundClock = 0, nearbyClock=0;
   function walk(dt){
     if(!player||!land)return;
     if(world.game?.mode==='adventure'&&world.game.health<=0){clearMovement();return;}
@@ -614,9 +677,15 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     const stateText={idle:'站立',start:'起步',walk:'慢走',jog:'慢跑',sprint:'冲刺',pivot:'转身',stop:'停步',jump:'起跳',fall:'下落',land:'落地','land-heavy':'缓冲落地',vault:'撑墙翻越',climb:'攀上平台'}[player.state];
     const motionText=stateText+' · '+player.speed.toFixed(1)+' m/s';
     if(motionText!==lastMotion){lastMotion=motionText;onGame({type:'locomotion',text:motionText,state:player.state});}
-    const observe=nearest(),tree=nearest(true);
-    const signature=(observe?.type??'')+'|'+(tree?.type??'');
-    if(signature!==nearKey){nearKey=signature;onNearby({observe,tree});}
+    nearbyClock-=dt;
+    if(!dt||nearbyClock<=0){
+      nearbyClock=.2;
+      shoreVisitors.watch(player);
+      const observe=nearest(),tree=nearest(true),mine=nearbyMineTarget();
+      const traversal=player.grounded&&!player.traversal?planTraversal(player,Math.sin(player.a),Math.cos(player.a),nav,crowd,playerBody)?.kind:null;
+      const signature=[observe?.type,observe?.wildVisitor,tree?.type,mine?.kind,mine?.type,traversal].join('|');
+      if(signature!==nearKey){nearKey=signature;onNearby({observe,tree,mine,traversal});}
+    }
   }
   function nearest(chop=false){
     if(!playing||!player||!land||player.traversal)return null;
@@ -635,6 +704,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
       const d=close(t.x,t.z);
       if(d<minimum){minimum=d;result=t;}
     };
+    for(const t of shoreVisitors.targets())consider(t);
     for(const t of ecology?.targets??[])consider(t);
     for(const {object:o,agent:a} of objects.values()){
       if(a)consider({kind:'animal',type:o.type,id:o.id,x:a.x,z:a.z,agent:a});
@@ -661,6 +731,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
         target.agent.heading=target.agent.turnTo;
         const entry=objects.get(target.id);
         if(entry)placeAnimal(entry,time);
+        else if(!target.wildVisitor)ecology.step(time,world.light,0);
       }
     }
     schedule();
@@ -676,26 +747,36 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
   }
 
 
-  function strikeTarget(){
-    if(!playing||!player||player.traversal||(world.game?.mode==='adventure'&&world.game.health<=0)||player.swing>.27)return null;
+  function nearbyMineTarget(){
+    if(!playing||!player||player.traversal||(world.game?.mode==='adventure'&&world.game.health<=0))return null;
+    const fixtures=[];
+    for(const {object:o} of objects.values()){
+      if(items[o.type].category!=='animal'&&Math.hypot(o.x-player.x,o.z-player.z)<=Math.hypot(o.w,o.d)*.5+2.1)fixtures.push(o);
+    }
+    const walls=fixtures.filter(o=>items[o.type].category==='house').map(o=>({id:o.id,parts:collisionParts(o)}));
     const candidates=[];
-    for(const o of world.objects){
-      if(items[o.type].category==='animal')continue;
+    for(const o of fixtures){
       const c=Math.cos(o.a),s=Math.sin(o.a),dx=player.x-o.x,dz=player.z-o.z;
       const lx=c*dx-s*dz,lz=s*dx+c*dz,xx=T.MathUtils.clamp(lx,-o.w/2,o.w/2),zz=T.MathUtils.clamp(lz,-o.d/2,o.d/2);
       const x=o.x+c*xx+s*zz,z=o.z-s*xx+c*zz,d=Math.hypot(player.x-x,player.z-z);
       if(d>2.05)continue;
       let blocked=false;
       for(let t=.12;t<.9;t+=.1){const px=player.x+(x-player.x)*t,pz=player.z+(z-player.z)*t;
-       if(world.objects.some(b=>b.id!==o.id&&items[b.type].category==='house'&&collisionParts(b).some(part=>inFootprint(px,pz,part)))){blocked=true;break;}}
+       if(walls.some(b=>b.id!==o.id&&b.parts.some(part=>inFootprint(px,pz,part)))){blocked=true;break;}}
       if(!blocked)candidates.push({...o,d,kind:items[o.type].category==='house'?'house':items[o.type].category==='plant'?'wood':'stone'});
     }
-    candidates.sort((a,b)=>a.d-b.d);const target=candidates[0];
-    player.swing=1;player.weapon='axe';
-    if(target){player.a=Math.atan2(target.x-player.x,target.z-player.z);schedule();return target;}
+    candidates.sort((a,b)=>a.d-b.d);
+    if(candidates.length)return candidates[0];
     const x=player.x+Math.sin(yaw)*1.3,z=player.z+Math.cos(yaw)*1.3;
     if(!land.userData.navigation.valid(x,z,.5,'land'))return null;
     return {kind:'ground',x,z};
+  }
+  function strikeTarget(){
+    if(!player||player.swing>.27)return null;
+    const target=nearbyMineTarget();if(!target)return null;
+    player.swing=1;player.weapon='axe';
+    if(target.kind!=='ground')player.a=Math.atan2(target.x-player.x,target.z-player.z);
+    schedule();return target;
   }
   function attack(){
     if(!playing||!player||player.traversal||world.game?.mode!=='adventure'||world.game.health<=0||player.swing>.27)return null;
@@ -726,8 +807,9 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     schedule();
     return new Promise(resolve=>c.toBlob(resolve,'image/png'));
   }
-  return {update,cameraMode,reset,snapshot,clearPreview,cursor,showFootprint,showObject,showStroke,
-    beginWalk,endWalk,observe,chop,attack,strikeTarget,
+  return {update,cameraMode,reset,snapshot,focusPoint,projectGround,frameFrontier,releaseFrontier,showFrontier(preview){frontierOverlay(preview);schedule();},clearPreview,cursor,showFootprint,showObject,showStroke,
+    beginWalk,endWalk,observe,chop,attack,strikeTarget,startChallenge(){return playing&&adventure.start(player);},
+    walkPosition(){return player?{x:player.x,y:player.y,z:player.z}:null;},
     focusRegion(x,z){
       if(!region?.continuous)return;
       const [sx,sz]=tileShift(x,z),dx=sx-controls.target.x,dz=sz-controls.target.z;
@@ -736,6 +818,7 @@ export function createViewport(stage,onMetrics,onInput,onRegion,onNearby,onGame=
     },
     refreshModels(type){
       if(!world)return;
+      shoreVisitors.refreshModel(type);
       for(const entry of objects.values())if(entry.object.type===type){
         const {object:o,agent:a}=entry;disposeGroup(entry.group);
         entry.group=buildObject(kit,o,world,land.userData.field);scene.add(entry.group);
